@@ -1,2 +1,8 @@
 /venv
 run.py
+cricv.db
+.env
+*.db
+*.sqlite
+*.env
+cricv.db
