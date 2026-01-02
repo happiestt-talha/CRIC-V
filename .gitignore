@@ -6,3 +6,5 @@ cricv.db
 *.sqlite
 *.env
 cricv.db
+.data
+data/
