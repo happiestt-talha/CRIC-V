@@ -16,7 +16,7 @@ passlib[bcrypt]==1.7.4
 python-dotenv==1.0.0
 
 # Computer Vision & ML
-mediapipe==0.10.9
+mediapipe>=0.10.11
 opencv-python==4.8.1.78
 ultralytics==8.0.196  # YOLOv8
 numpy==1.24.3
