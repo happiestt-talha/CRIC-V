@@ -130,7 +130,7 @@ async def health_check():
 async def not_found_exception_handler(request, exc):
     return JSONResponse(
         status_code=404,
-        content={"message": "Resource not found"}
+        content={"message": exc.detail or "Resource not found" }
     )
 
 @app.exception_handler(500)

@@ -99,7 +99,7 @@ async def register(
             user_id=db_user.id,
             full_name=getattr(user_data, 'full_name', user_data.username),
             age=getattr(user_data, 'age', None),
-            batting_style=getattr(user_data, 'batting_style', None),
+            batting_hand=getattr(user_data, 'batting_hand', None),
             bowling_style=getattr(user_data, 'bowling_style', None)
         )
         db.add(player)

@@ -57,7 +57,7 @@ class TokenData(BaseModel):
 
 # Player schemas
 class PlayerBase(BaseModel):
-    name: str
+    full_name: str
     age: Optional[int] = None
     batting_hand: Optional[BattingHand] = BattingHand.RIGHT
     bowling_style: Optional[BowlingStyle] = None
