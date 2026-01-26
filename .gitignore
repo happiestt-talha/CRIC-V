@@ -8,3 +8,4 @@ cricv.db
 cricv.db
 .data
 data/
+mig.py

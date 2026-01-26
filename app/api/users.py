@@ -54,8 +54,9 @@ async def create_player(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     db_player = Player(
-        name=player.name,
+        full_name=player.full_name,
         age=player.age,
+        user_id=current_user.id,
         batting_hand=player.batting_hand,
         bowling_style=player.bowling_style,
         coach_id=current_user.id

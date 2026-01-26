@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.core import security, schemas
 from app.database import get_db
 from app.core.models import User, Session as DBSession, Analysis, Player
+from app.services.video_processor import process_video_background
 
 router = APIRouter()
 
@@ -17,9 +18,13 @@ async def get_session_analysis(
     """
     Get analysis results for a specific session
     """
+    print("Request received")
+    print("current_user", current_user)
+    print("session_id", session_id)
     session = db.query(DBSession).filter(DBSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    print("session", session)
+    # if not session:
+    #     raise HTTPException(status_code=404, detail="Session not found")
     
     # Check permissions
     if current_user.role == "coach" and session.coach_id != current_user.id:
@@ -89,6 +94,7 @@ async def get_player_batting_analysis(
 async def trigger_manual_analysis(
     session_id: int,
     analysis_type: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(security.get_current_user)
 ):
@@ -106,7 +112,12 @@ async def trigger_manual_analysis(
     if current_user.role == "coach" and session.coach_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Start analysis (you can call your processing function here)
-    # This would typically be added to a task queue
+    # Start analysis in background
+    background_tasks.add_task(
+        process_video_background,
+        session_id=session.id,
+        video_path=session.video_path,
+        session_type=analysis_type
+    )
     
     return {"message": "Analysis triggered", "session_id": session_id}
