@@ -1,0 +1,11 @@
+venv
+__pycache__
+.git
+.gitignore
+*.pyc
+*.pyo
+*.pyd
+data
+test_videos
+cricv.db
+/test_videos

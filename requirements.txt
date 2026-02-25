@@ -3,6 +3,7 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 aiofiles==23.2.1
+email-validator
 
 # Database
 sqlalchemy==2.0.23
@@ -34,3 +35,4 @@ pydantic-settings==2.1.0
 python-magic==0.4.27
 moviepy==1.0.3
 requests==2.31.0
+pydantic[email]
