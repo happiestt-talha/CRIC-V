@@ -15,8 +15,8 @@ class BallDetector:
             # Load a pre-trained model (you can fine-tune it for cricket balls)
             self.model = YOLO('yolov8n.pt')
         
-        # Cricket ball class (you might need to train a custom model)
-        self.ball_class_id = 32  # Sports ball class in COCO
+        # Sports ball class in COCO dataset (class 32 = sports ball)
+        self.ball_class_id = 32
         
     def detect_ball_in_video(self, video_path: str) -> List[Dict]:
         """

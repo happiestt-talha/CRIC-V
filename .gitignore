@@ -9,3 +9,6 @@ cricv.db
 .data
 data/
 mig.py
+__pycache__/
+*.pyc
+/test_videos

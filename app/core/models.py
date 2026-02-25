@@ -119,6 +119,9 @@ class Session(Base):
     video_path = Column(String, nullable=True)
     status = Column(String(30), nullable=False)  # uploaded, processing, completed, failed
 
+    title = Column(String(255), nullable=True)           # optional session title
+    thumbnail_path = Column(String, nullable=True)       # path to generated thumbnail
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -213,3 +216,76 @@ class Analysis(Base):
 
     def __repr__(self):
         return f"<Analysis id={self.id} session_id={self.session_id} type={self.analysis_type!r}>"
+
+class BallTrackingAnalysis(Base):
+    __tablename__ = "ball_tracking_analyses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    delivery_number = Column(Integer)
+    
+    # 3D Trajectory (if multiple cameras)
+    trajectory_3d = Column(JSON)  # list of points {x,y,z,frame}
+    release_point_3d = Column(JSON)
+    pitch_landing_3d = Column(JSON)
+    bat_contact_3d = Column(JSON)
+    final_position_3d = Column(JSON)
+    
+    # Ball physics
+    speed_kmh = Column(Float)
+    spin_rpm = Column(Float)
+    swing_angle = Column(Float)   # degrees of lateral movement
+    seam_angle = Column(Float)     # orientation at release
+    
+    # Performance metrics
+    accuracy_score = Column(Float)  # 0-100 (how close to target)
+    is_yorker = Column(Boolean)
+    is_bouncer = Column(Boolean)
+    is_full_toss = Column(Boolean)
+    
+    # Batting impact
+    shot_power = Column(Float)      # estimated power index
+    shot_timing = Column(Float)      # 0-100 (early/late)
+    runs_scored = Column(Integer)    # if boundary detected
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    session = relationship("Session", backref="ball_tracking")
+
+class Delivery(Base):
+    __tablename__ = "deliveries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    delivery_number = Column(Integer)  # within session
+    
+    # Ball tracking metrics
+    speed_kmh = Column(Float)
+    spin_rpm = Column(Float)
+    swing_angle = Column(Float)        # lateral movement in degrees/cm
+    pitch_landing_x = Column(Float)    # normalized 0-1 (left-right)
+    pitch_landing_y = Column(Float)    # normalized 0-1 (distance from bowler)
+    line = Column(String)               # "off", "middle", "leg"
+    length = Column(String)             # "yorker", "full", "good", "short", "bouncer"
+    is_boundary = Column(Boolean, default=False)
+    boundary_type = Column(String)      # "four", "six"
+    runs = Column(Integer, default=0)
+    
+    # Pose metrics at delivery
+    elbow_extension = Column(Float)
+    release_point_x = Column(Float)
+    release_point_y = Column(Float)
+    release_point_z = Column(Float)
+    
+    # For batting
+    shot_type = Column(String)          # "drive", "cut", "pull", etc.
+    shot_power = Column(Float)           # 0-100
+    shot_timing = Column(Float)          # 0-100 (100 = perfect)
+    shot_direction = Column(String)      # "cover", "midwicket", "straight", etc.
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    session = relationship("Session", backref="deliveries")

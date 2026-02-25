@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -45,7 +45,7 @@ class User(UserBase):
     created_at: datetime
     
     class Config:
-        orm_mode = True
+        model_config = ConfigDict(from_attributes=True)
 
 # Token schemas
 class Token(BaseModel):
@@ -70,7 +70,7 @@ class Player(PlayerBase):
     coach_id: int
     
     class Config:
-        orm_mode = True
+        model_config = ConfigDict(from_attributes=True)
 
 # Session schemas
 class SessionBase(BaseModel):
@@ -89,7 +89,7 @@ class Session(SessionBase):
     created_at: datetime
     
     class Config:
-        orm_mode = True
+        model_config = ConfigDict(from_attributes=True)
 
 # Analysis schemas
 class AnalysisBase(BaseModel):
@@ -125,7 +125,7 @@ class Analysis(AnalysisBase):
     created_at: datetime
     
     class Config:
-        orm_mode = True
+        model_config = ConfigDict(from_attributes=True)
 
 # Dashboard schemas
 class DashboardStats(BaseModel):
@@ -133,3 +133,23 @@ class DashboardStats(BaseModel):
     total_players: int
     recent_analyses: List[Analysis]
     upcoming_sessions: List[Session]
+
+# Bowling Insights Schemas
+class SpeedConsistency(BaseModel):
+    avg_speed: float
+    std_dev: float
+    consistency_score: float
+    total_deliveries: int
+    max_speed: float
+    min_speed: float
+
+class LineLengthHeatmap(BaseModel):
+    heatmap: Dict[str, Dict[str, float]]  # e.g., {"off": {"yorker": 12.5, ...}}
+    most_common_line: str
+    most_common_length: str
+
+class BowlingInsightsResponse(BaseModel):
+    player_id: int
+    speed_consistency: SpeedConsistency
+    line_length_heatmap: LineLengthHeatmap
+    # You can add more fields later (e.g., economy_prediction, wicket_probability)
