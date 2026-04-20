@@ -4,112 +4,69 @@ ICC and coaching standards for batting and bowling
 Based on MCC Laws of Cricket and coaching manuals
 """
 
-ICC_BATTING_STANDARDS = {
-    "stance": {
-        "optimal": {
-            "head_position": {"x_variance": 0.05, "y_variance": 0.03},
-            "shoulder_alignment": {"max_tilt": 5},  # degrees
-            "knee_flexion": {"min": 140, "max": 160},  # degrees
-            "weight_distribution": {"front": 45, "back": 55, "tolerance": 10}
-        },
-        "types": {
-            "square": {"shoulder_angle": (85, 95)},
-            "open": {"shoulder_angle": (96, 120)},
-            "closed": {"shoulder_angle": (60, 84)}
-        }
-    },
-    "backlift": {
-        "optimal": {
-            "bat_angle": {"min": 15, "max": 45},  # degrees from vertical
-            "height": {"min": 0.3, "max": 0.7},  # normalized height
-            "straightness": {"max_deviation": 10}  # degrees
-        }
-    },
-    "footwork": {
-        "forward_defense": {"stride_length": 0.2, "balance_score": 8},
-        "drive": {"stride_length": 0.3, "weight_transfer": 70},
-        "pull_shot": {"back_foot_pivot": True, "head_position": "stable"}
-    }
-}
+# Constants
+MAX_ELBOW_EXTENSION_DEGREES = 15.0
+LEGAL_FRONT_FOOT_ZONE = 0.95  # normalized pitch position (behind crease)
+MIN_BALL_HEIGHT_AT_RELEASE = 0.6  # normalized (above waist)
 
-ICC_BOWLING_STANDARDS = {
-    "legal_limits": {
-        "elbow_extension": 15,  # degrees (Law 21.3)
-        "front_foot": 0.0,  # Must land behind popping crease
-        "arm_actions": {
-            "legal": ["bowling", "throwing_warning", "throwing_illegal"],
-            "thresholds": {
-                "warning": 12,  # degrees (warning threshold)
-                "illegal": 15   # degrees (illegal threshold)
-            }
-        }
-    },
-    "action_types": {
-        "fast_bowling": {
-            "run_up": {"length": "long", "rhythm": "smooth"},
-            "jump": {"height": "moderate", "landing": "balanced"},
-            "delivery_stride": {"length": "long", "braking": "strong"}
-        },
-        "spin_bowling": {
-            "gather": {"pause": "brief", "balance": "excellent"},
-            "pivot": {"rotation": "full", "arm_speed": "fast"}
-        }
+def check_bowling_action(elbow_angle: float) -> dict:
+    """
+    Check if the elbow extension is within ICC limits (Law 21.3)
+    """
+    legal = elbow_angle <= MAX_ELBOW_EXTENSION_DEGREES
+    warning = not legal or (elbow_angle > 12.0)
+    
+    violation = None
+    if not legal:
+        violation = f"Elbow extension {elbow_angle:.1f}° exceeds {MAX_ELBOW_EXTENSION_DEGREES}° limit"
+    
+    return {
+        "legal": legal,
+        "angle": round(elbow_angle, 1),
+        "violation": violation,
+        "warning": warning
     }
-}
 
-def check_batting_compliance(metrics: dict) -> dict:
-    """Check batting metrics against ICC/coaching standards"""
-    compliance = {"pass": True, "warnings": [], "issues": []}
+def check_front_foot(foot_y_normalized: float) -> dict:
+    """
+    Check if the front foot landed behind the popping crease (Law 24.5)
+    """
+    # Assuming y=1 is bottom of frame (near crease)
+    # Crease is typically at y ~ 0.95
+    legal = foot_y_normalized <= LEGAL_FRONT_FOOT_ZONE
+    margin = LEGAL_FRONT_FOOT_ZONE - foot_y_normalized
     
-    # Check stance
-    stance_type = metrics.get("stance_type", "unknown")
-    if stance_type in ICC_BATTING_STANDARDS["stance"]["types"]:
-        shoulder_angle = metrics.get("shoulder_angle", 90)
-        min_angle, max_angle = ICC_BATTING_STANDARDS["stance"]["types"][stance_type]["shoulder_angle"]
-        
-        if not (min_angle <= shoulder_angle <= max_angle):
-            compliance["warnings"].append(f"Shoulder angle {shoulder_angle}° not optimal for {stance_type} stance")
-    
-    # Check head position
-    head_movement = metrics.get("head_movement", 0)
-    if head_movement > ICC_BATTING_STANDARDS["stance"]["optimal"]["head_position"]["y_variance"]:
-        compliance["issues"].append(f"Excessive head movement: {head_movement:.2f}")
-        compliance["pass"] = False
-    
-    return compliance
-
-def check_bowling_compliance(metrics: dict) -> dict:
-    """Check bowling metrics against ICC standards"""
-    compliance = {
-        "legal": True,
-        "elbow_status": "legal",
-        "front_foot_status": "legal",
-        "violations": []
+    return {
+        "legal": legal,
+        "margin_cm": round(margin * 100, 1) # rough scale
     }
+
+def check_ball_height(release_y_normalized: float) -> dict:
+    """
+    Check if the ball is released at a high enough point (not a 'chuck')
+    """
+    valid = release_y_normalized > MIN_BALL_HEIGHT_AT_RELEASE
+    category = "high" if release_y_normalized > 0.8 else "medium" if release_y_normalized > 0.6 else "low"
     
-    # Elbow extension check
-    elbow_ext = metrics.get("elbow_extension", 0)
-    if elbow_ext > ICC_BOWLING_STANDARDS["legal_limits"]["elbow_extension"]:
-        compliance["legal"] = False
-        compliance["elbow_status"] = "illegal"
-        compliance["violations"].append({
-            "rule": "Law 21.3",
-            "detail": f"Elbow extension {elbow_ext:.1f}° exceeds 15° limit"
-        })
-    elif elbow_ext > ICC_BOWLING_STANDARDS["legal_limits"]["arm_actions"]["thresholds"]["warning"]:
-        compliance["elbow_status"] = "warning"
-        compliance["violations"].append({
-            "rule": "Law 21.3 (Warning)",
-            "detail": f"Elbow extension {elbow_ext:.1f}° close to limit"
-        })
+    return {
+        "valid": valid,
+        "height_category": category
+    }
+
+def get_full_compliance_report(delivery_data: dict) -> dict:
+    """
+    Get full ICC compliance report for a delivery
+    """
+    elbow_check = check_bowling_action(delivery_data.get("elbow_angle", 0))
+    foot_check = check_front_foot(delivery_data.get("foot_y", 1.0))
+    height_check = check_ball_height(delivery_data.get("release_y", 0))
     
-    # Front foot check
-    if metrics.get("front_foot_no_ball", False):
-        compliance["legal"] = False
-        compliance["front_foot_status"] = "no_ball"
-        compliance["violations"].append({
-            "rule": "Law 24.5",
-            "detail": "Front foot landing beyond popping crease"
-        })
+    compliant = elbow_check["legal"] and foot_check["legal"]
     
-    return compliance
+    return {
+        "is_compliant": compliant,
+        "elbow": elbow_check,
+        "foot": foot_check,
+        "height": height_check,
+        "overall_status": "Legal" if compliant else "Illegal/Notice"
+    }

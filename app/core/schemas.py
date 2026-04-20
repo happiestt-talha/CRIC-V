@@ -153,3 +153,27 @@ class BowlingInsightsResponse(BaseModel):
     speed_consistency: SpeedConsistency
     line_length_heatmap: LineLengthHeatmap
     # You can add more fields later (e.g., economy_prediction, wicket_probability)
+
+# Feedback Schemas
+class FeedbackBase(BaseModel):
+    comments: str
+    drill_recommendations: List[str] = []
+    rating: int = Field(5, ge=1, le=5)
+
+class FeedbackCreate(FeedbackBase):
+    session_id: int
+
+class FeedbackUpdate(BaseModel):
+    comments: Optional[str] = None
+    drill_recommendations: Optional[List[str]] = None
+    rating: Optional[int] = Field(None, ge=1, le=5)
+
+class FeedbackResponse(FeedbackBase):
+    id: int
+    session_id: int
+    coach_id: int
+    coach_name: str
+    created_at: datetime
+
+    class Config:
+        model_config = ConfigDict(from_attributes=True)

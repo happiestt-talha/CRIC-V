@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status, UploadFile, File  # Add File here
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -131,3 +132,35 @@ async def upload_session_video(
         )
     
     return {"message": "Video uploaded and processing started", "session_id": session_id}
+
+@router.get("/{session_id}/annotated-video")
+async def get_annotated_video(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Returns the processed annotated video file
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Check permissions
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    elif current_user.role == "player" and session.player_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    video_path = f"data/processed/annotated_{session_id}.mp4"
+    
+    if not os.path.exists(video_path):
+        # We could trigger generation here if not yet generated, 
+        # but process_video_background should have handled it.
+        # If it's missing, maybe still processing or failed.
+        if session.status == "processing":
+            raise HTTPException(status_code=202, detail="Video is still being processed")
+        else:
+            raise HTTPException(status_code=404, detail="Annotated video not found")
+
+    return FileResponse(video_path, media_type="video/mp4", filename=f"annotated_session_{session_id}.mp4")

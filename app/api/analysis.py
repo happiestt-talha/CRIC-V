@@ -185,3 +185,112 @@ async def get_bowling_insights(
         "speed_consistency": speed_stats,
         "line_length_heatmap": heatmap,
     }
+
+# --- Feedback Endpoints ---
+
+@router.post("/session/{session_id}/feedback", response_model=schemas.FeedbackResponse)
+async def create_feedback(
+    session_id: int,
+    feedback: schemas.FeedbackCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user)
+):
+    """
+    Create feedback for a session (Coaches/Admins only)
+    """
+    if current_user.role not in ["coach", "admin"]:
+        raise HTTPException(status_code=403, detail="Only coaches can provide feedback")
+
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # If coach, verify they are assigned or it's their player
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+         # Optional: Allow any coach to feedback if it's a public session? 
+         # Sticking to assigned coach for now
+         raise HTTPException(status_code=403, detail="Not authorized to feedback on this session")
+
+    new_feedback = models.Feedback(
+        session_id=session_id,
+        coach_id=current_user.id,
+        comments=feedback.comments,
+        drill_recommendations=feedback.drill_recommendations,
+        rating=feedback.rating
+    )
+    db.add(new_feedback)
+    db.commit()
+    db.refresh(new_feedback)
+    
+    # Add coach name for schema
+    return {
+        **new_feedback.__dict__,
+        "coach_name": current_user.username # Or current_user.full_name if available
+    }
+
+@router.get("/session/{session_id}/feedback", response_model=List[schemas.FeedbackResponse])
+async def get_session_feedback(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user)
+):
+    """
+    Get all feedback for a session
+    """
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Permissions: Coach of session, Player of session, or Admin
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == "player" and session.player_id != current_user.id: # Check if current_user is the player
+        # Need to check player link. Let's see if player_id in session is linked to current_user.id
+        player = db.query(models.Player).filter(models.Player.user_id == current_user.id).first()
+        if not player or session.player_id != player.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    feedbacks = db.query(models.Feedback).filter(models.Feedback.session_id == session_id).all()
+    
+    results = []
+    for f in feedbacks:
+        coach = db.query(models.User).filter(models.User.id == f.coach_id).first()
+        f_dict = f.__dict__
+        f_dict["coach_name"] = coach.username if coach else "Unknown Coach"
+        results.append(f_dict)
+        
+    return results
+
+@router.put("/session/{session_id}/feedback/{feedback_id}", response_model=schemas.FeedbackResponse)
+async def update_feedback(
+    session_id: int,
+    feedback_id: int,
+    feedback_update: schemas.FeedbackUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user)
+):
+    """
+    Update existing feedback (Only the coach who created it can update)
+    """
+    db_feedback = db.query(models.Feedback).filter(
+        models.Feedback.id == feedback_id,
+        models.Feedback.session_id == session_id
+    ).first()
+    
+    if not db_feedback:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+        
+    if db_feedback.coach_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to edit this feedback")
+
+    update_data = feedback_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_feedback, key, value)
+        
+    db.commit()
+    db.refresh(db_feedback)
+    
+    return {
+        **db_feedback.__dict__,
+        "coach_name": current_user.username
+    }

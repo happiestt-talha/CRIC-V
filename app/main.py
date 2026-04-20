@@ -17,7 +17,8 @@ import json
 # Import local modules
 from app.database import get_db, SessionLocal
 from app.core import models, schemas, security
-from app.api import auth, users, sessions, analysis, ball_tracking
+from app.api import auth, users, sessions, analysis, ball_tracking, admin
+from app.core.models import User, Session as DBSession, Player, Analysis, Delivery
 from app.services.video_processor import validate_video_file, create_thumbnail
 from app.workers.tasks import process_video_task
 
@@ -49,6 +50,7 @@ app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(sessions.router, prefix="/sessions", tags=["Sessions"])
 app.include_router(analysis.router, prefix="/analysis", tags=["Analysis"])
 app.include_router(ball_tracking.router)
+app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 
 
 # Create data directories
@@ -151,40 +153,48 @@ async def get_dashboard_stats(
     total_sessions = db.query(models.Session).count()
     total_players = db.query(models.Player).count()
     total_analyses = db.query(models.Analysis).count()
-    
-    # User-specific counts
-    user_sessions = db.query(models.Session).filter(
-        models.Session.coach_id == current_user.id
-    ).count()
+    total_deliveries = db.query(Delivery).count()
     
     # Recent activity
     last_week = datetime.utcnow() - timedelta(days=7)
-    recent_sessions = db.query(models.Session).filter(
-        models.Session.created_at  >= last_week
+    sessions_this_week = db.query(models.Session).filter(
+        models.Session.created_at >= last_week
     ).count()
     
-    # Analysis breakdown
-    bowling_analyses = db.query(models.Analysis).filter(
-        models.Analysis.analysis_type == "bowling"
-    ).count()
+    # Speed stats
+    avg_speed = db.query(func.avg(Delivery.speed_kmh)).scalar() or 0
     
-    batting_analyses = db.query(models.Analysis).filter(
-        models.Analysis.analysis_type == "batting"
-    ).count()
+    # Top bowler
+    top_bowler_data = db.query(
+        models.Player.full_name,
+        func.avg(Delivery.speed_kmh).label("avg_speed")
+    ).join(models.Session).join(Delivery).group_by(models.Player.id).order_by(text("avg_speed DESC")).first()
+    
+    top_bowler = {"name": top_bowler_data[0], "avg_speed": round(top_bowler_data[1], 1)} if top_bowler_data else {"name": "N/A", "avg_speed": 0}
+
+    # Recent sessions (last 5)
+    recent_sessions_list = db.query(models.Session).join(models.Player).order_by(models.Session.created_at.desc()).limit(5).all()
+    recent_sessions = []
+    for s in recent_sessions_list:
+        recent_sessions.append({
+            "id": s.id,
+            "title": s.title,
+            "player_name": s.player.full_name if s.player else "Unknown",
+            "session_type": s.session_type,
+            "status": s.status,
+            "created_at": s.created_at.isoformat(),
+            "thumbnail_path": s.thumbnail_path
+        })
     
     return {
-        "overview": {
-            "total_sessions": total_sessions,
-            "total_players": total_players,
-            "total_analyses": total_analyses,
-            "user_sessions": user_sessions,
-            "recent_sessions_7d": recent_sessions
-        },
-        "analysis_breakdown": {
-            "bowling": bowling_analyses,
-            "batting": batting_analyses,
-            "other": total_analyses - bowling_analyses - batting_analyses
-        }
+        "total_sessions": total_sessions,
+        "total_players": total_players,
+        "total_analyses": total_analyses,
+        "total_deliveries": total_deliveries,
+        "sessions_this_week": sessions_this_week,
+        "avg_ball_speed_kph": round(avg_speed, 1),
+        "top_bowler": top_bowler,
+        "recent_sessions": recent_sessions
     }
 
 @app.get("/")

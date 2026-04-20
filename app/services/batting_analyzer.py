@@ -1,363 +1,176 @@
+import os
+import cv2
 import numpy as np
-from typing import Dict, List
-from .pose_service import PoseDetector
-from .advanced_ball_detector import AdvancedBallDetector  # NEW
+from typing import Dict, List, Any
+from app.services.pose_service import PoseDetector
+from app.services.shot_classifier import ShotClassifier
+from app.core.models import Analysis, Delivery
+from app.database import SessionLocal
+
 class BattingAnalyzer:
     def __init__(self):
         self.pose_detector = PoseDetector()
-        self.ball_detector = AdvancedBallDetector(model_path="models/cricket_ball_detector.pt")  # NEW
-        
-    def analyze_video(self, video_path: str) -> Dict:
+        self.shot_classifier = ShotClassifier()
+
+    def analyze_video(self, video_path: str, session_id: int = None) -> Dict:
         """
-        Main function to analyze batting video with ball tracking
+        Complete batting analysis:
+        1. Extract pose keypoints
+        2. Segment into shots
+        3. Classify each shot
+        4. Aggregate results
         """
-        # Get pose data
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video not found at {video_path}")
+
+        # 1. Extract Pose Keypoints
         pose_report = self.pose_detector.process_video(video_path)
         frames = pose_report.get("frames", [])
-        
-        # Ball tracking
-        ball_detections = self.ball_detector.detect_ball_in_video(video_path)
-        ball_trajectory = self.ball_detector.track_ball_trajectory(video_path)
-        
-        # Detect bat contact (combine pose and ball)
-        contact_frame, contact_point = self.detect_bat_contact(frames, ball_trajectory)
+        fps = pose_report.get("metadata", {}).get("fps", 30)
 
-        shot_type = self.classify_shot_type(ball_trajectory, contact_point)
-        shot_direction = self.classify_shot_direction(ball_trajectory, contact_point)
+        if not frames:
+            return {"error": "No pose detected in video"}
 
-        if session_id:
-            db = SessionLocal()
-            try:
-                delivery = Delivery(
-                    session_id=session_id,
-                    delivery_number=1,
-                    speed_kmh=metrics.get("ball_speed_faced"),
-                    shot_power=metrics.get("shot_power"),
-                    shot_timing=metrics.get("shot_timing"),
-                    shot_type=shot_type,
-                    shot_direction=shot_direction,
-                    runs=metrics.get("runs_predicted", 0),
-                )
-                db.add(delivery)
-                db.commit()
-            finally:
-                db.close()
-                
-        # Calculate batting metrics
-        metrics = self.calculate_batting_metrics(frames)
+        # 2. Segment Video into Shots
+        # Heuristic: Detect shots by peaks in wrist movement and bat angle
+        shots_metadata = self._segment_shots(frames)
         
-        # Add ball-based metrics
-        metrics["ball_speed_faced"] = self.ball_detector.calculate_ball_speed(ball_trajectory)
-        metrics["shot_power"] = self.calculate_shot_power(ball_trajectory, contact_frame)
-        metrics["shot_timing"] = self.calculate_shot_timing(frames, ball_trajectory, contact_frame)
-        metrics["runs_predicted"] = self.predict_runs(ball_trajectory, metrics["shot_power"])
-        metrics["contact_point"] = contact_point
+        analyzed_shots = []
+        shot_distribution = {}
 
-        # Save to database if session_id provided
-        if session_id:
-            self._save_delivery_to_db(session_id, ball_trajectory, metrics.get("ball_speed_faced"), 
-                                      metrics, shot_type, shot_direction)
-        # Generate recommendations
-        recommendations = self.generate_batting_recommendations(metrics)
+        for i, shot_meta in enumerate(shots_metadata):
+            start_f = shot_meta["start_frame"]
+            end_f = shot_meta["end_frame"]
+            shot_frames = frames[start_f:end_f+1]
+            
+            # Prepare keypoints for classifier
+            # Classifier expects dict of {landmark_id: {x,y,z}}
+            sequence = []
+            for f in shot_frames:
+                if f.get("landmarks"):
+                    sequence.append({lm["id"]: lm for lm in f["landmarks"]})
+            
+            if not sequence:
+                continue
+
+            # 3. Classify Shot
+            shot_result = self.shot_classifier.classify_shot(sequence)
+            shot_type = shot_result["shot_type"]
+            
+            # Update distribution
+            shot_distribution[shot_type] = shot_distribution.get(shot_type, 0) + 1
+            
+            # Store detail
+            analyzed_shots.append({
+                "shot_number": i + 1,
+                "shot_type": shot_type,
+                "start_frame": start_f,
+                "end_frame": end_f,
+                "quality_score": shot_result["quality_score"],
+                "bat_angle": shot_result["bat_angle"],
+                "stride_length": shot_result["stride_length"],
+                "head_position": {"stable": shot_result["head_position"] == "stable", "deviation_cm": 1.2}, # placeholder deviation
+                "weight_distribution": {"front": 65 if shot_result["weight_distribution"] == "front_foot" else 35, 
+                                       "back": 35 if shot_result["weight_distribution"] == "front_foot" else 65},
+                "footwork_score": shot_result["footwork_score"],
+                "timing_score": shot_result["timing_score"],
+                "recommendations": shot_result["recommendations"]
+            })
+
+        # 4. Aggregate Session Summary
+        total_shots = len(analyzed_shots)
+        avg_quality = sum(s["quality_score"] for s in analyzed_shots) / total_shots if total_shots > 0 else 0
         
-        return {
-            "batting_metrics": {
-                "stance_type": metrics["stance_type"],
-                "weight_distribution": metrics["weight_distribution"],
-                "bat_angle": metrics["bat_angle"],
-                "head_position": metrics["head_position"],
-                "ball_speed_faced": metrics["ball_speed_faced"],
-                "shot_power": metrics["shot_power"],
-                "shot_timing": metrics["shot_timing"],
-                "runs_predicted": metrics["runs_predicted"],
-                "contact_point": metrics["contact_point"],
-                "recommendations": recommendations
+        # Determine stance type from first few frames
+        stance_type = self._detect_stance(frames[:fps])
+
+        report = {
+            "session_summary": {
+                "total_shots": total_shots,
+                "shot_distribution": shot_distribution,
+                "average_quality_score": round(avg_quality, 1),
+                "stance_type": stance_type,
+                "consistency_score": 75 # placeholder
             },
-            "pose_data": pose_report,
-            "ball_tracking": {
-                "detections_count": len(ball_detections),
-                "trajectory_summary": ball_trajectory.get("summary", {}),
-            }
+            "shots": analyzed_shots
         }
-    
-    def detect_bat_contact(self, frames: List[Dict], ball_trajectory: Dict):
-        """
-        Detect frame where bat contacts ball by combining pose and ball position
-        """
-        if not ball_trajectory or "points_2d" not in ball_trajectory:
-            return None, None
-        
-        ball_points = ball_trajectory["points_2d"]
-        if len(ball_points) < 2:
-            return None, None
-        
-        # Simplified: look for sudden change in ball direction (impact)
-        # You can also use bat position from pose if available
-        for i in range(1, len(ball_points)):
-            dx = ball_points[i]["x"] - ball_points[i-1]["x"]
-            dy = ball_points[i]["y"] - ball_points[i-1]["y"]
-            speed = np.sqrt(dx**2 + dy**2)
-            if speed > 0.1:  # threshold
-                # Candidate contact frame
-                return ball_points[i]["frame"], {"x": ball_points[i]["x"], "y": ball_points[i]["y"]}
-        
-        return None, None
 
-    def detect_batting_phases(self, frames: List[Dict]) -> Dict:
+        # 5. Save to Database
+        if session_id:
+            self._save_to_db(session_id, report)
+
+        return report
+
+    def _segment_shots(self, frames: List[Dict]) -> List[Dict]:
         """
-        Detect different phases of batting
+        Detect shot segments.
+        A shot is roughly defined as a period where the wrists move significantly.
         """
-        phases = {
-            "stance": [],
-            "backlift": [],
-            "shot_execution": [],
-            "follow_through": []
-        }
+        shots = []
+        # Simplified: if video is short, assume one shot. 
+        # For longer videos, look for wrist vertical velocity peaks.
         
-        # Simplified phase detection
-        for i, frame in enumerate(frames):
-            if i < len(frames) * 0.3:
-                phases["stance"].append(i)
-            elif i < len(frames) * 0.6:
-                phases["backlift"].append(i)
-            elif i < len(frames) * 0.9:
-                phases["shot_execution"].append(i)
-            else:
-                phases["follow_through"].append(i)
+        # Real segmentation logic...
+        # For now, let's divide into logical segments where pose is detected
+        # In a real scenario, we'd use a rolling window to find movement bursts
         
-        return phases
-    
-    def calculate_batting_metrics(self, frames: List[Dict], phases: Dict) -> Dict:
-        """
-        Calculate batting-specific metrics
-        """
-        metrics = {}
+        if len(frames) < 60: # less than 2 seconds
+            return [{"start_frame": 0, "end_frame": len(frames)-1}]
         
-        # Analyze stance
-        stance_frames = [frames[i] for i in phases["stance"] if i < len(frames)]
-        metrics.update(self.analyze_stance(stance_frames))
+        # Simple windowing as placeholder for complex detection
+        # We'll split the video into 2-second chunks if it's long
+        chunk_size = 60
+        for i in range(0, len(frames), chunk_size):
+            if i + chunk_size <= len(frames):
+                shots.append({"start_frame": i, "end_frame": i + chunk_size - 1})
         
-        # Analyze weight distribution
-        metrics["weight_distribution"] = self.calculate_weight_distribution(frames)
-        
-        # Analyze bat angle
-        metrics["bat_angle"] = self.calculate_bat_angle(frames)
-        
-        # Analyze head position
-        metrics["head_position"] = self.analyze_head_movement(frames)
-        
-        return metrics
-    
-    def analyze_stance(self, frames: List[Dict]) -> Dict:
-        """
-        Analyze batting stance
-        """
-        if not frames:
-            return {"stance_type": "unknown"}
-        
-        # Get shoulder positions from first frame
-        frame = frames[0]
-        landmarks = frame.get("landmarks", [])
-        
-        if len(landmarks) < 13:  # Need shoulder landmarks
-            return {"stance_type": "unknown"}
-        
-        left_shoulder = landmarks[11]
-        right_shoulder = landmarks[12]
-        
-        # Determine stance based on shoulder alignment
-        shoulder_diff = left_shoulder["x"] - right_shoulder["x"]
-        
-        if shoulder_diff > 0.05:
-            return {"stance_type": "open_stance"}
-        elif shoulder_diff < -0.05:
-            return {"stance_type": "closed_stance"}
-        else:
-            return {"stance_type": "square_stance"}
-    
-    def calculate_weight_distribution(self, frames: List[Dict]) -> Dict[str, float]:
-        """
-        Calculate weight distribution between feet
-        """
-        # Simplified calculation
-        # In reality, you'd analyze center of mass
-        return {"front_foot": 45, "back_foot": 55, "balance_score": 8.5}
-    
-    def calculate_bat_angle(self, frames: List[Dict]) -> float:
-        """
-        Calculate bat angle during stance
-        """
-        if not frames:
-            return 0.0
-        
-        # Simplified - would need bat detection
-        # For now, return a placeholder
-        return 25.0  # degrees
-    
-    def analyze_head_movement(self, frames: List[Dict]) -> Dict[str, float]:
-        """
-        Analyze head stillness
-        """
-        head_positions = []
+        return shots
+
+    def _detect_stance(self, frames: List[Dict]) -> str:
+        """Analyze shoulder orientation to camera to determine stance"""
         for frame in frames:
-            landmarks = frame.get("landmarks", [])
-            if len(landmarks) > 0:  # Nose landmark index 0
-                nose = landmarks[0]
-                head_positions.append([nose["x"], nose["y"]])
-        
-        if not head_positions:
-            return {"stillness": 0, "movement": 0}
-        
-        head_positions = np.array(head_positions)
-        movement = np.std(head_positions, axis=0).sum()
-        stillness = max(0, 10 - movement)  # Higher is better
-        
-        return {"stillness": float(stillness), "movement": float(movement)}
-    
-    def generate_batting_recommendations(self, metrics: Dict) -> List[str]:
-        """
-        Generate batting coaching recommendations
-        """
-        recommendations = []
-        
-        # Stance recommendations
-        stance = metrics.get("stance_type", "")
-        if stance == "open_stance":
-            recommendations.append("Open stance detected - ensure you're not exposing off stump")
-        elif stance == "closed_stance":
-            recommendations.append("Closed stance detected - watch for lbw decisions")
-        
-        # Weight distribution
-        weight_dist = metrics.get("weight_distribution", {})
-        front_weight = weight_dist.get("front_foot", 50)
-        if front_weight < 40:
-            recommendations.append("Consider transferring more weight to front foot during shot")
-        
-        # Head position
-        head_pos = metrics.get("head_position", {})
-        if head_pos.get("stillness", 0) < 5:
-            recommendations.append("Work on keeping your head still during the shot")
-        else:
-            recommendations.append("Good head position - keep it up!")
-        
-        return recommendations
-    
-    def calculate_shot_power(self, ball_trajectory: Dict, contact_frame) -> float:
-        """
-        Estimate shot power based on ball speed after contact
-        """
-        if not ball_trajectory or "points_2d" not in ball_trajectory or contact_frame is None:
-            return 50.0  # default
-        
-        points = ball_trajectory["points_2d"]
-        # Find index of contact
-        contact_idx = None
-        for i, p in enumerate(points):
-            if p.get("frame") == contact_frame:
-                contact_idx = i
-                break
-        
-        if contact_idx is None or contact_idx >= len(points)-1:
-            return 50.0
-        
-        # Calculate speed after contact (next few frames)
-        after = points[contact_idx+1: min(contact_idx+5, len(points))]
-        if len(after) < 2:
-            return 50.0
-        
-        dx = after[-1]["x"] - after[0]["x"]
-        dy = after[-1]["y"] - after[0]["y"]
-        distance = np.sqrt(dx**2 + dy**2)
-        # Rough conversion to power scale (0-100)
-        power = min(distance * 1000, 100)
-        return round(power, 1)
-    
-    def calculate_shot_timing(self, frames: List[Dict], ball_trajectory: Dict, contact_frame) -> float:
-        """
-        Calculate timing (0-100) based on how early/late the ball was hit relative to ideal
-        """
-        # Simplified: return a placeholder
-        return 75.0
-    
-    def predict_runs(self, ball_trajectory: Dict, power: float) -> int:
-        """
-        Predict runs based on trajectory and power
-        """
-        if not ball_trajectory or "points_2d" not in ball_trajectory:
-            return 0
-        
-        points = ball_trajectory["points_2d"]
-        if len(points) < 2:
-            return 0
-        
-        # Check if ball ends near boundary (simplified)
-        last = points[-1]
-        # Assuming normalized coordinates, boundary is near edges (x near 0 or 1)
-        if last["x"] < 0.1 or last["x"] > 0.9 or last["y"] < 0.1 or last["y"] > 0.9:
-            # Check height to differentiate four vs six
-            if last["y"] < 0.2:  # high trajectory -> six
-                return 6
-            else:
-                return 4
-        elif power > 80:
-            return 2
-        elif power > 50:
-            return 1
-        else:
-            return 0
-    
-    def classify_shot_type(trajectory, contact_point):
-    # Simplified: based on bat angle and ball trajectory after contact
-    # For now, return a placeholder
-        return "drive"
+            landmarks = frame.get("landmarks")
+            if not landmarks: continue
+            
+            # Map indices
+            l_shoulder = next((l for l in landmarks if l["id"] == 11), None)
+            r_shoulder = next((l for l in landmarks if l["id"] == 12), None)
+            
+            if l_shoulder and r_shoulder:
+                # Shoulder x-distance
+                dist = abs(l_shoulder["x"] - r_shoulder["x"])
+                if dist < 0.1: return "side-on"
+                if dist > 0.2: return "open"
+        return "side-on"
 
-    def classify_shot_direction(trajectory, contact_point):
-    # Determine direction based on ball's path after contact
-        if not trajectory or "points_2d" not in trajectory:
-            return "straight"
-        points = trajectory["points_2d"]
-        if len(points) < 3:
-            return "straight"
-        # Find point after contact
-        contact_idx = None
-        for i, p in enumerate(points):
-            if p.get("frame") == contact_point.get("frame"):
-                contact_idx = i
-                break
-        if contact_idx is None or contact_idx >= len(points)-1:
-            return "straight"
-        after = points[contact_idx+1]
-        dx = after["x"] - contact_point["x"]
-        if dx < -0.1:
-            return "cover"  # left side
-        elif dx > 0.1:
-            return "midwicket"  # right side
-        else:
-            return "straight"
-
-    def _save_delivery_to_db(self, session_id: int, ball_trajectory: dict, ball_speed: float, 
-                            metrics: dict, shot_type: str, shot_direction: str):
-        """Save batting delivery to database"""
-        from app.database import SessionLocal
-        from app.core.models import Delivery
-
-        # Determine runs (from predict_runs)
-        runs = metrics.get("runs_predicted", 0)
-
+    def _save_to_db(self, session_id: int, report: Dict):
+        """Persist analysis result to DB"""
         db = SessionLocal()
         try:
-            # For now, assume one delivery per session (you can increment delivery_number later)
-            delivery = Delivery(
-                session_id=session_id,
-                delivery_number=1,
-                speed_kmh=ball_speed,
-                shot_power=metrics.get("shot_power"),
-                shot_timing=metrics.get("shot_timing"),
-                shot_type=shot_type,
-                shot_direction=shot_direction,
-                runs=runs
-            )
-            db.add(delivery)
+            # Update or Create Analysis
+            analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
+            if not analysis:
+                analysis = Analysis(session_id=session_id)
+                db.add(analysis)
+
+            analysis.analysis_type = "batting"
+            
+            summary = report["session_summary"]
+            analysis.stance_type = summary["stance_type"]
+            analysis.batting_metrics = {
+                "total_shots": summary["total_shots"],
+                "average_quality_score": summary["average_quality_score"],
+                "shot_distribution": summary["shot_distribution"]
+            }
+            # Also store top level for API convenience
+            analysis.recommendations = report["shots"][0]["recommendations"] if report["shots"] else []
+            
+            # Update Session Status
+            from app.core.models import Session
+            session = db.query(Session).filter(Session.id == session_id).first()
+            if session:
+                session.status = "completed"
+            
             db.commit()
         finally:
             db.close()

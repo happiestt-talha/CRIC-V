@@ -198,6 +198,21 @@ def process_video_background(session_id: int, video_path: str, session_type: str
         session.status = "completed"
         db.commit()
 
+        # Phase 5: Generate annotated video
+        output_dir = os.path.join("data", "processed")
+        os.makedirs(output_dir, exist_ok=True)
+        output_video_path = os.path.join(output_dir, f"annotated_{session_id}.mp4")
+        
+        generate_annotated_video(
+            input_video_path=video_path,
+            output_video_path=output_video_path,
+            analysis_results=result,
+            session_type=session_type
+        )
+        
+        # We could store output_video_path in session model if we add a column
+        # For now, we'll assume it follows this naming convention in the API
+
     except Exception as e:
         print(f"Error processing video: {e}")
         # If session exists, mark as failed
@@ -206,3 +221,98 @@ def process_video_background(session_id: int, video_path: str, session_type: str
             db.commit()
     finally:
         db.close()
+
+def generate_annotated_video(
+    input_video_path: str,
+    output_video_path: str,
+    analysis_results: dict,
+    session_type: str,
+    overlay_pose: bool = True,
+    overlay_ball: bool = True,
+    overlay_metrics: bool = True
+) -> str:
+    """
+    Generate video with overlays:
+    - MediaPipe Skeleton
+    - Ball Bounding Box
+    - Metrics HUD
+    """
+    cap = cv2.VideoCapture(input_video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+
+    # Pose connections for drawing
+    POSE_CONNECTIONS = [
+        (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), # Upper body
+        (11, 23), (12, 24), (23, 24), # Torso
+        (23, 25), (25, 27), (24, 26), (26, 28) # Lower body
+    ]
+
+    frame_idx = 0
+    pose_frames = analysis_results.get("pose_data", {}).get("frames", [])
+    
+    # Structure for metrics HUD
+    if session_type == "batting":
+        shots = analysis_results.get("shots", [])
+    else:
+        deliveries = analysis_results.get("deliveries", [])
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # 1. Draw Pose
+        if overlay_pose and frame_idx < len(pose_frames):
+            landmarks = pose_frames[frame_idx].get("landmarks", [])
+            lm_pts = {lm["id"]: (int(lm["x"] * width), int(lm["y"] * height)) for lm in landmarks}
+            
+            for start_idx, end_idx in POSE_CONNECTIONS:
+                if start_idx in lm_pts and end_idx in lm_pts:
+                    cv2.line(frame, lm_pts[start_idx], lm_pts[end_idx], (0, 255, 0), 2)
+            
+            for pt in lm_pts.values():
+                cv2.circle(frame, pt, 4, (0, 255, 255), -1)
+
+        # 2. Draw HUD (Metrics Overlay)
+        if overlay_metrics:
+            # Simple HUD in top-left
+            cv2.rectangle(frame, (10, 10), (300, 120), (0, 0, 0), -1)
+            cv2.rectangle(frame, (10, 10), (300, 120), (255, 255, 255), 2)
+            
+            y_offset = 40
+            if session_type == "batting":
+                # Find current shot
+                current_shot = next((s for s in shots if s["start_frame"] <= frame_idx <= s["end_frame"]), None)
+                if current_shot:
+                    texts = [
+                        f"Shot: {current_shot['shot_type']}",
+                        f"Quality: {current_shot['quality_score']}",
+                        f"Bat Angle: {current_shot['bat_angle']} deg"
+                    ]
+                    for text in texts:
+                        cv2.putText(frame, text, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        y_offset += 30
+            else:
+                # Bowling HUD
+                current_delivery = next((d for d in deliveries if d["release_frame"] <= frame_idx), None)
+                if current_delivery:
+                    texts = [
+                        f"Speed: {current_delivery['ball_speed_kph']} kph",
+                        f"Elbow: {current_delivery['elbow_angle']} deg",
+                        f"Compliance: {'Legal' if current_delivery['icc_compliant'] else 'Illegal'}"
+                    ]
+                    for text in texts:
+                        cv2.putText(frame, text, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        y_offset += 30
+
+        out.write(frame)
+        frame_idx += 1
+
+    cap.release()
+    out.release()
+    return output_video_path

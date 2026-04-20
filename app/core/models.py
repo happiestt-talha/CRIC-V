@@ -43,6 +43,12 @@ class User(Base):
         foreign_keys="Player.coach_id",
     )
 
+    feedbacks = relationship(
+        "Feedback",
+        back_populates="coach",
+        foreign_keys="Feedback.coach_id",
+    )
+
     def __repr__(self):
         return f"<User id={self.id} username={self.username!r}>"
 
@@ -137,6 +143,12 @@ class Session(Base):
         "Analysis",
         back_populates="session",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    feedbacks = relationship(
+        "Feedback",
+        back_populates="session",
         cascade="all, delete-orphan",
     )
 
@@ -289,3 +301,29 @@ class Delivery(Base):
     
     # Relationships
     session = relationship("Session", backref="deliveries")
+
+class Feedback(Base):
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(
+        Integer,
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    coach_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    comments = Column(Text, nullable=False)
+    drill_recommendations = Column(JSON, default=list)
+    rating = Column(Integer, default=5)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    session = relationship("Session", back_populates="feedbacks")
+    coach = relationship("User", back_populates="feedbacks")
+
+    def __repr__(self):
+        return f"<Feedback id={self.id} session_id={self.session_id} coach_id={self.coach_id}>"
