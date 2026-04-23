@@ -3,6 +3,9 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 import json
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # For MediaPipe 0.10.31 with Tasks API
 try:
@@ -12,7 +15,8 @@ try:
     MP_AVAILABLE = True
 except ImportError:
     MP_AVAILABLE = False
-    print("WARNING: MediaPipe not available. Using mock implementation.")
+    MP_AVAILABLE = False
+    logger.warning("MediaPipe not available. Using mock implementation.")
 
 class PoseDetector:
     def __init__(self, model_path: Optional[str] = None):
@@ -23,7 +27,7 @@ class PoseDetector:
         self.detector = None
         
         if not MP_AVAILABLE:
-            print("WARNING: MediaPipe not installed. Using mock pose detector.")
+            logger.warning("MediaPipe not installed. Using mock pose detector.")
             return
             
         try:
@@ -41,11 +45,11 @@ class PoseDetector:
             
             # Create the detector
             self.detector = vision.PoseLandmarker.create_from_options(options)
-            print(f"Pose detector initialized with model: {self.model_path}")
+            logger.info(f"Pose detector initialized with model: {self.model_path}")
             
         except Exception as e:
-            print(f"WARNING: Failed to initialize MediaPipe Pose detector: {e}")
-            print("Using mock implementation instead.")
+            logger.warning(f"Failed to initialize MediaPipe Pose detector: {e}")
+            logger.info("Using mock implementation instead.")
             self.detector = None
     
     def _get_default_model_path(self):
@@ -59,14 +63,14 @@ class PoseDetector:
         
         for path in possible_paths:
             if os.path.exists(path):
-                print(f"Found model at: {path}")
+                logger.info(f"Found model at: {path}")
                 return path
         
         # If not found anywhere
-        print(f"WARNING: Model file not found in any of these locations: {possible_paths}")
-        print("Please download the pose landmarker model from:")
-        print("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task")
-        print("And place it in one of the above locations.")
+        logger.warning(f"Model file not found in any of these locations: {possible_paths}")
+        logger.info("Please download the pose landmarker model from:")
+        logger.info("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task")
+        logger.info("And place it in one of the above locations.")
         
         return possible_paths[0]  # Return first path to trigger error
     
@@ -122,9 +126,9 @@ class PoseDetector:
             frames_data.append(frame_data)
             frame_number += 1
             
-            # Print progress every 10 frames
-            if frame_number % 10 == 0:
-                print(f"Processed {frame_number}/{frame_count} frames...")
+            # Print progress every 50 frames to reduce noise
+            if frame_number % 50 == 0:
+                logger.info(f"Processed {frame_number}/{frame_count} frames...")
         
         cap.release()
         

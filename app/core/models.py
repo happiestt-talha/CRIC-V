@@ -127,6 +127,7 @@ class Session(Base):
 
     title = Column(String(255), nullable=True)           # optional session title
     thumbnail_path = Column(String, nullable=True)       # path to generated thumbnail
+    annotated_video_path = Column(String, nullable=True) # path to processed video with overlays
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -149,6 +150,19 @@ class Session(Base):
     feedbacks = relationship(
         "Feedback",
         back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+    deliveries = relationship(
+        "Delivery",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+    ball_tracking = relationship(
+        "BallTrackingAnalysis",
+        back_populates="session",
+        uselist=False,
         cascade="all, delete-orphan",
     )
 
@@ -263,7 +277,7 @@ class BallTrackingAnalysis(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship
-    session = relationship("Session", backref="ball_tracking")
+    session = relationship("Session", back_populates="ball_tracking")
 
 class Delivery(Base):
     __tablename__ = "deliveries"
@@ -300,7 +314,7 @@ class Delivery(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
-    session = relationship("Session", backref="deliveries")
+    session = relationship("Session", back_populates="deliveries")
 
 class Feedback(Base):
     __tablename__ = "feedbacks"

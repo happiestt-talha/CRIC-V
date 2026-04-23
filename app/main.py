@@ -5,6 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Optional
@@ -13,6 +14,7 @@ import shutil
 import uuid
 from datetime import datetime, timedelta
 import json
+from sqlalchemy import func
 
 # Import local modules
 from app.database import get_db, SessionLocal
@@ -35,10 +37,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your frontend URLs
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Range", "Accept-Ranges"]
 )
 
 # OAuth2 scheme
@@ -57,6 +60,9 @@ app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 os.makedirs("data/raw_videos", exist_ok=True)
 os.makedirs("data/thumbnails", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
+
+# Mount static directories
+app.mount("/data/thumbnails", StaticFiles(directory="data/thumbnails"), name="thumbnails")
 
 @app.post("/upload", response_model=schemas.Session)
 async def upload_video(
@@ -149,53 +155,127 @@ async def get_dashboard_stats(
     """
     Get dashboard statistics
     """
-    # Total counts
-    total_sessions = db.query(models.Session).count()
-    total_players = db.query(models.Player).count()
-    total_analyses = db.query(models.Analysis).count()
-    total_deliveries = db.query(Delivery).count()
-    
-    # Recent activity
-    last_week = datetime.utcnow() - timedelta(days=7)
-    sessions_this_week = db.query(models.Session).filter(
-        models.Session.created_at >= last_week
-    ).count()
-    
-    # Speed stats
-    avg_speed = db.query(func.avg(Delivery.speed_kmh)).scalar() or 0
-    
-    # Top bowler
-    top_bowler_data = db.query(
-        models.Player.full_name,
-        func.avg(Delivery.speed_kmh).label("avg_speed")
-    ).join(models.Session).join(Delivery).group_by(models.Player.id).order_by(text("avg_speed DESC")).first()
-    
-    top_bowler = {"name": top_bowler_data[0], "avg_speed": round(top_bowler_data[1], 1)} if top_bowler_data else {"name": "N/A", "avg_speed": 0}
+    try:
+        # Total counts
+        total_sessions = db.query(models.Session).count()
+        total_players = db.query(models.Player).count()
+        total_analyses = db.query(models.Analysis).count()
+        total_deliveries = db.query(Delivery).count()
 
-    # Recent sessions (last 5)
-    recent_sessions_list = db.query(models.Session).join(models.Player).order_by(models.Session.created_at.desc()).limit(5).all()
-    recent_sessions = []
-    for s in recent_sessions_list:
-        recent_sessions.append({
-            "id": s.id,
-            "title": s.title,
-            "player_name": s.player.full_name if s.player else "Unknown",
-            "session_type": s.session_type,
-            "status": s.status,
-            "created_at": s.created_at.isoformat(),
-            "thumbnail_path": s.thumbnail_path
-        })
-    
-    return {
-        "total_sessions": total_sessions,
-        "total_players": total_players,
-        "total_analyses": total_analyses,
-        "total_deliveries": total_deliveries,
-        "sessions_this_week": sessions_this_week,
-        "avg_ball_speed_kph": round(avg_speed, 1),
-        "top_bowler": top_bowler,
-        "recent_sessions": recent_sessions
-    }
+        # Sessions this week
+        last_week = datetime.utcnow() - timedelta(days=7)
+        sessions_this_week = db.query(models.Session).filter(
+            models.Session.created_at >= last_week
+        ).count()
+
+        # Average ball speed — try both column name variants safely
+        avg_speed = 0
+        try:
+            # Try speed_kmh first
+            avg_speed = db.query(func.avg(Delivery.speed_kmh)).scalar() or 0
+        except Exception:
+            try:
+                # Try ball_speed_kph as fallback
+                avg_speed = db.query(func.avg(Delivery.ball_speed_kph)).scalar() or 0
+            except Exception:
+                avg_speed = 0
+
+        # Top bowler — fixed join using select_from + explicit ON clauses
+        top_bowler = {"name": "N/A", "avg_speed": 0}
+        try:
+            speed_col = None
+            # Detect which column exists on Delivery
+            if hasattr(Delivery, 'speed_kmh'):
+                speed_col = Delivery.speed_kmh
+            elif hasattr(Delivery, 'ball_speed_kph'):
+                speed_col = Delivery.ball_speed_kph
+
+            if speed_col is not None:
+                top_bowler_data = (
+                    db.query(
+                        models.Player.full_name,
+                        func.avg(speed_col).label("avg_speed")
+                    )
+                    .select_from(models.Player)
+                    .join(
+                        models.Session,
+                        models.Session.player_id == models.Player.id
+                    )
+                    .join(
+                        Delivery,
+                        Delivery.session_id == models.Session.id
+                    )
+                    .group_by(models.Player.id)
+                    .order_by(func.avg(speed_col).desc())
+                    .first()
+                )
+                if top_bowler_data:
+                    top_bowler = {
+                        "name": top_bowler_data[0],
+                        "avg_speed": round(float(top_bowler_data[1]), 1)
+                    }
+        except Exception as e:
+            print(f"[WARN] top_bowler query failed: {e}")
+            top_bowler = {"name": "N/A", "avg_speed": 0}
+
+        # Recent sessions — last 5
+        recent_sessions = []
+        try:
+            recent_sessions_list = (
+                db.query(models.Session)
+                .order_by(models.Session.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            for s in recent_sessions_list:
+                # Get player name safely without relying on relationship
+                player_name = "Unknown"
+                try:
+                    if s.player_id:
+                        player = db.query(models.Player).filter(
+                            models.Player.id == s.player_id
+                        ).first()
+                        if player:
+                            player_name = player.full_name
+                except Exception:
+                    pass
+
+                recent_sessions.append({
+                    "id": s.id,
+                    "title": s.title or f"Session #{s.id}",
+                    "player_name": player_name,
+                    "session_type": s.session_type,
+                    "status": s.status,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "thumbnail_path": s.thumbnail_path,
+                })
+        except Exception as e:
+            print(f"[WARN] recent_sessions query failed: {e}")
+
+        return {
+            "total_sessions": total_sessions,
+            "total_players": total_players,
+            "total_analyses": total_analyses,
+            "total_deliveries": total_deliveries,
+            "sessions_this_week": sessions_this_week,
+            "avg_ball_speed_kph": round(float(avg_speed), 1),
+            "top_bowler": top_bowler,
+            "recent_sessions": recent_sessions,
+        }
+
+    except Exception as e:
+        print(f"[ERROR] dashboard/stats failed: {e}")
+        # Return safe fallback so frontend doesn't crash
+        return {
+            "total_sessions": 0,
+            "total_players": 0,
+            "total_analyses": 0,
+            "total_deliveries": 0,
+            "sessions_this_week": 0,
+            "avg_ball_speed_kph": 0,
+            "top_bowler": {"name": "N/A", "avg_speed": 0},
+            "recent_sessions": [],
+        }
 
 @app.get("/")
 async def root():

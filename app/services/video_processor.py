@@ -155,44 +155,43 @@ def process_video_background(session_id: int, video_path: str, session_type: str
 
         # Process video based on type
         analysis_data = {}
+        result = {}
+        
         if session_type == "bowling":
             analyzer = BowlingAnalyzer()
-            result = analyzer.analyze_video(video_path)  # ensure method name matches
-            # Map bowling metrics to analysis model
-            metrics = result.get("bowling_metrics", {})
+            result = analyzer.analyze_video(video_path, session_id=session_id)
+            # BowlingAnalyzer._save_to_db already handles database persistence if session_id is passed
+            # But we still want to prepare analysis_data for the local Analysis object if needed
+            metrics = result.get("session_summary", {})
             analysis_data = {
-                "elbow_extension": metrics.get("elbow_extension"),
-                "arm_type": metrics.get("arm_type"),
-                "release_point": metrics.get("release_point"),
-                "swing_type": metrics.get("swing_type"),
-                "front_foot_landing": metrics.get("front_foot_landing"),
-                "icc_compliant": metrics.get("icc_compliant"),
-                "recommendations": metrics.get("recommendations", []),
+                "elbow_extension": result.get("deliveries", [{}])[0].get("elbow_angle") if result.get("deliveries") else 0.0,
+                "arm_type": metrics.get("arm_type", "unknown"),
+                "icc_compliant": metrics.get("icc_compliant_percentage") == 100,
+                "recommendations": metrics.get("recommendations", ["Analysis completed"]),
             }
         elif session_type == "batting":
             analyzer = BattingAnalyzer()
-            result = analyzer.analyze_video(video_path)
-            metrics = result.get("batting_metrics", {})
+            result = analyzer.analyze_video(video_path, session_id=session_id)
+            metrics = result.get("session_summary", {})
             analysis_data = {
                 "stance_type": metrics.get("stance_type"),
-                "weight_distribution": metrics.get("weight_distribution"),
-                "bat_angle": metrics.get("bat_angle"),
-                "head_position": metrics.get("head_position"),
-                "recommendations": metrics.get("recommendations", []),
+                "bat_angle": metrics.get("average_quality_score"), # Use avg score as proxy or specific metric
+                "recommendations": result.get("shots", [{}])[0].get("recommendations", []) if result.get("shots") else [],
             }
+        
+        # Ensure analysis record exists (analyzers might have created it, but let's be sure)
+        analysis = db.query(models.Analysis).filter(models.Analysis.session_id == session_id).first()
+        if not analysis:
+            analysis = models.Analysis(
+                session_id=session_id,
+                analysis_type=session_type,
+                **analysis_data
+            )
+            db.add(analysis)
         else:
-            # Generic pose analysis
-            result = pose_detector.process_video(video_path)
-            # No specific metrics to save yet – you could store raw data elsewhere
-            analysis_data = {}
-
-        # Save analysis to database
-        analysis = models.Analysis(
-            session_id=session_id,
-            analysis_type=session_type,
-            **analysis_data
-        )
-        db.add(analysis)
+            # Update existing
+            for key, value in analysis_data.items():
+                setattr(analysis, key, value)
 
         # Update session status to completed
         session.status = "completed"
@@ -210,8 +209,9 @@ def process_video_background(session_id: int, video_path: str, session_type: str
             session_type=session_type
         )
         
-        # We could store output_video_path in session model if we add a column
-        # For now, we'll assume it follows this naming convention in the API
+        # Store the output path in the database
+        session.annotated_video_path = output_video_path
+        db.commit()
 
     except Exception as e:
         print(f"Error processing video: {e}")
@@ -242,8 +242,12 @@ def generate_annotated_video(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
+    # Use a temporary file for the initial OpenCV output
+    temp_output = output_video_path.replace('.mp4', '_temp.mp4')
+    
+    # Use mp4v for the temporary file (standard OpenCV on Windows)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
 
     # Pose connections for drawing
     POSE_CONNECTIONS = [
@@ -315,4 +319,23 @@ def generate_annotated_video(
 
     cap.release()
     out.release()
-    return output_video_path
+
+    # Transcode to H.264 for browser compatibility
+    try:
+        import subprocess
+        subprocess.run([
+            'ffmpeg', '-y', '-i', temp_output, 
+            '-vcodec', 'libx264', '-crf', '23', 
+            '-pix_fmt', 'yuv420p', 
+            output_video_path
+        ], check=True, capture_output=True)
+        # Clean up temp file
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+    except Exception as e:
+        print(f"FFmpeg transcoding failed: {e}")
+        # If transcoding fails, rename temp to output so we at least have a file
+        if os.path.exists(temp_output) and not os.path.exists(output_video_path):
+            os.rename(temp_output, output_video_path)
+
+    return output_video_path

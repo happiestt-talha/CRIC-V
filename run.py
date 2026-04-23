@@ -1,12 +1,3 @@
-# # run.py
-# import uvicorn
-
-# if __name__ == "__main__":
-#     uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
-
-
-# ! NEW FILE
-
 #!/usr/bin/env python
 """
 CRIC-V Backend Startup Script (Windows-safe)
@@ -16,7 +7,31 @@ import subprocess
 import sys
 import os
 import shutil
+import logging
 from pathlib import Path
+
+# Suppress verbose logs from external libraries
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('absl').setLevel(logging.ERROR)
+
+
+# -------------------------
+# Database Initialization
+# -------------------------
+def init_database():
+    """Create all database tables if they don't exist"""
+    try:
+        from app.database import engine
+        from app.core.models import Base
+        
+        print("[*] Creating database tables...")
+        Base.metadata.create_all(bind=engine)
+        print("   [OK] Database tables ready")
+        return True
+    except Exception as e:
+        print(f"   [FAIL] Database initialization error: {e}")
+        return False
 
 
 # -------------------------
@@ -45,7 +60,6 @@ def check_database():
     except Exception as e:
         print(f"   [FAIL] Database error: {e}")
         return False
-
 
 
 def check_redis():
@@ -78,30 +92,33 @@ def check_dependencies():
 # Admin User
 # -------------------------
 def create_admin_user():
-    from app.database import SessionLocal
-    from app.core.models import User
-    from app.core.security import get_password_hash
-
-    db = SessionLocal()
+    """Create admin user (tables must exist before calling this)"""
     try:
-        admin = db.query(User).filter(User.username == "admin").first()
-        if not admin:
-            admin = User(
-                username="admin",
-                email="admin@cricv.com",
-                full_name="System Administrator",
-                hashed_password=get_password_hash("admin123"),
-                role="admin",
-            )
-            db.add(admin)
-            db.commit()
-            print("[OK] Admin user created (admin / admin123)")
-        else:
-            print(f"INFO: Admin user already exists")
+        from app.database import SessionLocal
+        from app.core.models import User
+        from app.core.security import get_password_hash
+
+        db = SessionLocal()
+        try:
+            admin = db.query(User).filter(User.username == "admin").first()
+            if not admin:
+                admin = User(
+                    username="admin",
+                    email="admin@cricv.com",
+                    hashed_password=get_password_hash("admin123"),
+                    role="admin",
+                )
+                db.add(admin)
+                db.commit()
+                print("[OK] Admin user created (admin / admin123)")
+            else:
+                print("INFO: Admin user already exists")
+        except Exception as e:
+            print(f"WARN: Admin creation failed: {e}")
+        finally:
+            db.close()
     except Exception as e:
-        print(f"WARN: Admin creation failed: {e}")
-    finally:
-        db.close()
+        print(f"ERROR: Could not create admin user: {e}")
 
 
 # -------------------------
@@ -139,7 +156,7 @@ def start_celery():
             "app.workers.tasks.celery_app",
             "worker",
             "--loglevel=info",
-            "--pool=solo",  # REQUIRED for Windows
+            "--pool=solo",
         ]
     )
 
@@ -166,10 +183,15 @@ def main():
     os.makedirs("data/thumbnails", exist_ok=True)
     os.makedirs("data/processed", exist_ok=True)
 
-    # Admin
+    # Initialize database
+    if not init_database():
+        print("\n❌ Startup aborted due to database initialization failure")
+        sys.exit(1)
+
+    # Create admin user
     create_admin_user()
 
-    # Dependencies
+    # Check dependencies
     if not check_dependencies():
         print("\n❌ Startup aborted due to dependency failure")
         sys.exit(1)

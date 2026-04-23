@@ -39,8 +39,8 @@ class BattingAnalyzer:
         shot_distribution = {}
 
         for i, shot_meta in enumerate(shots_metadata):
-            start_f = shot_meta["start_frame"]
-            end_f = shot_meta["end_frame"]
+            start_f = int(shot_meta["start_frame"])
+            end_f = int(shot_meta["end_frame"])
             shot_frames = frames[start_f:end_f+1]
             
             # Prepare keypoints for classifier
@@ -82,7 +82,7 @@ class BattingAnalyzer:
         avg_quality = sum(s["quality_score"] for s in analyzed_shots) / total_shots if total_shots > 0 else 0
         
         # Determine stance type from first few frames
-        stance_type = self._detect_stance(frames[:fps])
+        stance_type = self._detect_stance(frames[:int(fps)])
 
         report = {
             "session_summary": {
@@ -157,12 +157,10 @@ class BattingAnalyzer:
             
             summary = report["session_summary"]
             analysis.stance_type = summary["stance_type"]
-            analysis.batting_metrics = {
-                "total_shots": summary["total_shots"],
-                "average_quality_score": summary["average_quality_score"],
-                "shot_distribution": summary["shot_distribution"]
-            }
-            # Also store top level for API convenience
+            analysis.bat_angle = summary["average_quality_score"]
+            # Map top level metrics to JSON recommendations if needed or individual columns
+            analysis.weight_distribution = report["shots"][0]["weight_distribution"] if report["shots"] else {}
+            analysis.head_position = report["shots"][0]["head_position"] if report["shots"] else {}
             analysis.recommendations = report["shots"][0]["recommendations"] if report["shots"] else []
             
             # Update Session Status

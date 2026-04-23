@@ -4,6 +4,9 @@ Integration service that connects all components
 import os
 import json
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Dict, Any, Optional
 from datetime import datetime
 import cv2
@@ -39,10 +42,10 @@ class IntegrationService:
             session.status = SessionStatus.PROCESSING.value
             db.commit()
             
-            print(f"🚀 Starting analysis for session {session_id}: {session.session_type}")
+            logger.info(f"🚀 Starting analysis for session {session_id}: {session.session_type}")
             
             # Step 1: Extract video metadata
-            print("   Step 1: Extracting video metadata...")
+            logger.info("   Step 1: Extracting video metadata...")
             video_path = session.video_path
             if not os.path.exists(video_path):
                 raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -52,14 +55,14 @@ class IntegrationService:
             session.frame_count = metadata.get("frame_count")
             
             # Step 2: Pose detection
-            print("   Step 2: Running pose detection...")
+            logger.info("   Step 2: Running pose detection...")
             pose_report = self.pose_detector.process_video(video_path)
             
             if not pose_report or "frames" not in pose_report:
                 raise Exception("No pose data extracted from video")
             
             # Step 3: Run specific analysis
-            print(f"   Step 3: Running {session.session_type} analysis...")
+            logger.info(f"   Step 3: Running {session.session_type} analysis...")
             if session.session_type == "bowling":
                 analysis_result = self.bowling_analyzer.analyze_video(video_path)
                 analysis_type = "bowling"
@@ -70,7 +73,7 @@ class IntegrationService:
                 raise ValueError(f"Unknown session type: {session.session_type}")
             
             # Step 4: Create analysis record
-            print("   Step 4: Saving analysis to database...")
+            logger.info("   Step 4: Saving analysis to database...")
             
             # Extract metrics
             bowling_metrics = analysis_result.get("bowling_metrics", {})
@@ -125,7 +128,7 @@ class IntegrationService:
             
             db.commit()
             
-            print(f"✅ Analysis completed for session {session_id}")
+            logger.info(f"✅ Analysis completed for session {session_id}")
             
             return {
                 "success": True,
@@ -137,7 +140,7 @@ class IntegrationService:
             }
             
         except Exception as e:
-            print(f"❌ Error processing session {session_id}: {e}")
+            logger.error(f"❌ Error processing session {session_id}: {e}")
             
             # Update session status to failed
             if session:

@@ -82,6 +82,10 @@ async def get_current_user(
     if not token:
         token = request.cookies.get("access_token")
     
+    # If no header or cookie token, try to get from query parameter
+    if not token:
+        token = request.query_params.get("token")
+    
     if not token:
         return None
     

@@ -50,14 +50,14 @@ class BowlingAnalyzer:
             pitch_frame = deliv["pitch_frame"]
             
             # Elbow angle at release
-            elbow_angle = self._calculate_elbow_angle(frames[release_frame])
+            elbow_angle = self._calculate_elbow_angle(frames[int(release_frame)])
             
             # Ball Speed
-            speed_kph = self._calculate_ball_speed(release_frame, pitch_frame, fps)
+            speed_kph = self._calculate_ball_speed(int(release_frame), int(pitch_frame), fps)
             
             # ICC Compliance
-            release_y = self._get_landmark_y(frames[release_frame], 16) # Right wrist
-            foot_y = self._get_landmark_y(frames[release_frame], 28) # Right ankle
+            release_y = self._get_landmark_y(frames[int(release_frame)], 16) # Right wrist
+            foot_y = self._get_landmark_y(frames[int(release_frame)], 28) # Right ankle
             
             compliance = get_full_compliance_report({
                 "elbow_angle": elbow_angle,
@@ -207,12 +207,13 @@ class BowlingAnalyzer:
                 delivery = Delivery(
                     session_id=session_id,
                     delivery_number=d["delivery_number"],
-                    ball_speed_kmh=d["ball_speed_kph"], # Wait, column name is speed_kmh in model or ball_speed_kph?
-                    # Checking model... it was speed_kmh
-                    # Wait, let me check model again. 
-                    # speed_kmh (Delivery) vs speed_kmh (BallTrackingAnalysis)
-                    # The prompt says: Delivery (id, session_id, ball_speed_kph, line, length, ...)
+                    speed_kmh=d["ball_speed_kph"],
+                    line=d["line"],
+                    length=d["length"],
+                    elbow_extension=d["elbow_angle"],
+                    release_point_y=d["pitch_y"]
                 )
+                db.add(delivery)
                 # Actually, I should check the column names I saw in models.py
                 # Line 264: speed_kmh = Column(Float)
             

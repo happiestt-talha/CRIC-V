@@ -23,13 +23,9 @@ async def get_session_analysis(
     """
     Get analysis results for a specific session
     """
-    print("Request received")
-    print("current_user", current_user)
-    print("session_id", session_id)
     session = db.query(DBSession).filter(DBSession.id == session_id).first()
-    print("session", session)
-    # if not session:
-    #     raise HTTPException(status_code=404, detail="Session not found")
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
     
     # Check permissions
     if current_user.role == "coach" and session.coach_id != current_user.id:
@@ -39,7 +35,13 @@ async def get_session_analysis(
     
     analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
     if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found or still processing")
+        # If session is completed but analysis is missing, it might be a DB sync issue
+        if session.status == "completed":
+             raise HTTPException(status_code=404, detail="Analysis result not found in database")
+        elif session.status == "failed":
+             raise HTTPException(status_code=500, detail="Analysis failed during processing")
+        else:
+             raise HTTPException(status_code=202, detail="Analysis is still in progress")
     
     return analysis
 

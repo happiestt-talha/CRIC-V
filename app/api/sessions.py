@@ -163,4 +163,9 @@ async def get_annotated_video(
         else:
             raise HTTPException(status_code=404, detail="Annotated video not found")
 
-    return FileResponse(video_path, media_type="video/mp4", filename=f"annotated_session_{session_id}.mp4")
+    response = FileResponse(video_path, media_type="video/mp4", filename=f"annotated_session_{session_id}.mp4")
+    response.headers["Access-Control-Allow-Origin"] = "http://localhost:3000"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Range, Accept-Ranges"
+    return response

@@ -85,6 +85,8 @@ class Session(SessionBase):
     id: int
     coach_id: int
     video_path: Optional[str] = None
+    annotated_video_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None
     status: str
     created_at: datetime
     
