@@ -21,6 +21,14 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     refresh_token_hash = Column(String, nullable=True)
+    
+    # Auth redesign columns
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verification_token = Column(String, nullable=True)
+    verification_sent_at = Column(DateTime, nullable=True)
+    password_reset_token = Column(String, nullable=True)
+    password_reset_token_expires_at = Column(DateTime, nullable=True)
+    must_change_password = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     player = relationship(

@@ -35,13 +35,38 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
 
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+    expires_in: float
+    must_change_password: bool = False
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+    user_id: Optional[int] = None
+    role: Optional[str] = None
+
 class UserLogin(BaseModel):
     username: str
     password: str
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
+
 class User(UserBase):
     id: int
     is_active: bool
+    email_verified: bool
+    must_change_password: bool
     created_at: datetime
     
     class Config:
@@ -63,7 +88,7 @@ class PlayerBase(BaseModel):
     bowling_style: Optional[BowlingStyle] = None
 
 class PlayerCreate(PlayerBase):
-    pass
+    email: EmailStr
 
 class Player(PlayerBase):
     id: int
