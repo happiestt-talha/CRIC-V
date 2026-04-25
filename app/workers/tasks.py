@@ -30,7 +30,7 @@ celery_app.conf.update(
 )
 
 @celery_app.task(bind=True, name='process_video_task')
-def process_video_task(self, session_id: int):
+def process_video_task(self, session_id: int, *args, **kwargs):
     """
     Celery task to process video asynchronously
     """
@@ -78,7 +78,7 @@ def process_video_task(self, session_id: int):
         db.close()
 
 @celery_app.task(bind=True, name='analyze_video_task')
-def analyze_video_task(self, video_id: int):
+def analyze_video_task(self, video_id: int, *args, **kwargs):
     """
     Celery task to process a single video
     """
@@ -88,7 +88,7 @@ def analyze_video_task(self, video_id: int):
     return integration_service.process_video(video_id, task_id)
 
 @celery_app.task(bind=True, name='analyze_session_all_task')
-def analyze_session_all_task(self, session_id: int):
+def analyze_session_all_task(self, session_id: int, *args, **kwargs):
     """
     Celery task to process all videos in a session sequentially
     """

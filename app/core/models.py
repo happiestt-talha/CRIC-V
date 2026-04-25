@@ -1,3 +1,4 @@
+import enum
 from sqlalchemy import (
     Column, Integer, String, Float, DateTime, Boolean,
     ForeignKey, JSON, Text
@@ -6,6 +7,12 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 from sqlalchemy.sql import func
 from datetime import datetime
+
+class SessionStatus(enum.Enum):
+    UPLOADED = "uploaded"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 class User(Base):
     __tablename__ = "users"
@@ -206,18 +213,27 @@ class Analysis(Base):
     # Bowling metrics
     elbow_extension = Column(Float)
     arm_type = Column(String(50))
+    bowling_arm = Column(String(50))
+    bowling_style = Column(String(50))
     release_point = Column(JSON)
+    release_height = Column(Float)
+    release_speed = Column(Float)
     swing_type = Column(String(50))
+    accuracy_score = Column(Float)
     front_foot_landing = Column(JSON)
     icc_compliant = Column(Boolean)
+    violations = Column(JSON, default=list)
 
     # Batting metrics
     stance_type = Column(String(50))
     weight_distribution = Column(JSON)
     bat_angle = Column(Float)
+    head_stillness = Column(Float)
     head_position = Column(JSON)
+    shot_selection = Column(String(100))
     
     recommendations = Column(JSON, default=list)
+    pose_data = Column(JSON)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -230,11 +246,16 @@ class Analysis(Base):
             return None
         return {
             "elbow_extension": self.elbow_extension,
-            "arm_type": self.arm_type,
+            "arm_type": self.arm_type or self.bowling_arm,
+            "bowling_style": self.bowling_style,
             "release_point": self.release_point,
+            "release_height": self.release_height,
+            "release_speed": self.release_speed,
             "swing_type": self.swing_type,
+            "accuracy_score": self.accuracy_score,
             "front_foot_landing": self.front_foot_landing,
             "icc_compliant": self.icc_compliant,
+            "violations": self.violations or [],
             "recommendations": self.recommendations or []
         }
 
@@ -246,15 +267,13 @@ class Analysis(Base):
             "stance_type": self.stance_type,
             "weight_distribution": self.weight_distribution,
             "bat_angle": self.bat_angle,
+            "head_stillness": self.head_stillness,
             "head_position": self.head_position,
+            "shot_selection": self.shot_selection,
             "recommendations": self.recommendations or []
         }
         
-    @property
-    def pose_data(self):
-        # We don't store raw pose data in the analysis table currently
-        # It might be in session.processed_data or a separate file
-        return None
+
 
     def __repr__(self):
         return f"<Analysis id={self.id} session_id={self.session_id} type={self.analysis_type!r}>"

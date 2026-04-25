@@ -63,21 +63,17 @@ def check_database():
 
 
 def check_redis():
-    if not shutil.which("redis-cli"):
-        print("   WARN: Redis CLI not found (skipping Redis check)")
-        return False
-
     try:
-        subprocess.run(
-            ["redis-cli", "ping"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
+        import redis
+        r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=2)
+        r.ping()
         print("   [OK] Redis: Running")
         return True
+    except ImportError:
+        print("   WARN: 'redis' python package not found")
+        return False
     except Exception:
-        print("   [FAIL] Redis: Not running")
+        print("   [FAIL] Redis: Not running on localhost:6379")
         return False
 
 
@@ -142,8 +138,14 @@ def start_fastapi():
 
 
 def start_celery():
-    if not shutil.which("redis-cli"):
-        print("WARN: Skipping Celery (Redis not available)")
+    # We check for Redis in check_dependencies already, 
+    # but let's do a quick check here too to be safe.
+    try:
+        import redis
+        r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=2)
+        r.ping()
+    except Exception:
+        print("WARN: Skipping Celery (Redis not reachable)")
         return None
 
     print("[*] Starting Celery worker...")

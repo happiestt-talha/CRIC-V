@@ -148,19 +148,26 @@ class AnalysisBase(BaseModel):
     analysis_type: str
 
 class BowlingMetrics(BaseModel):
-    elbow_extension: float
-    arm_type: str
-    release_point: Dict[str, float]
+    elbow_extension: Optional[float] = None
+    arm_type: Optional[str] = None
+    bowling_style: Optional[str] = None
+    release_point: Optional[Dict[str, float]] = None
+    release_height: Optional[float] = None
+    release_speed: Optional[float] = None
     swing_type: Optional[str] = None
+    accuracy_score: Optional[float] = None
     front_foot_landing: Optional[Dict[str, float]] = None
-    icc_compliant: bool
+    icc_compliant: Optional[bool] = None
+    violations: List[str] = []
     recommendations: List[str] = []
 
 class BattingMetrics(BaseModel):
-    stance_type: str
-    weight_distribution: Dict[str, float]
-    bat_angle: float
-    head_position: Dict[str, float]
+    stance_type: Optional[str] = None
+    weight_distribution: Optional[Dict[str, float]] = None
+    bat_angle: Optional[float] = None
+    head_stillness: Optional[float] = None
+    head_position: Optional[Dict[str, float]] = None
+    shot_selection: Optional[str] = None
     recommendations: List[str] = []
 
 class AnalysisCreate(AnalysisBase):

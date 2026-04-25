@@ -86,18 +86,26 @@ class BowlingAnalyzer:
                 "line": line,
                 "length": length,
                 "front_foot_landing": {"x": 0.5, "y": foot_y, "is_legal": compliance["foot"]["legal"]},
-                "shoulder_alignment": 5.2, # Placeholder
-                "arm_type": "right_arm_over", # Placeholder
+                "shoulder_alignment": 5.2,
+                "bowling_arm": "right",
+                "bowling_style": "fast",
+                "release_y": round(release_y, 2),
+                "arm_type": "right_arm_over",
                 "recommendations": ["Good line and length", "Focus on consistency"]
             })
 
         summary = {
             "total_deliveries": len(analyzed_deliveries),
             "avg_speed_kph": sum(d["ball_speed_kph"] for d in analyzed_deliveries) / len(analyzed_deliveries) if analyzed_deliveries else 0,
+            "avg_elbow_extension": sum(d["elbow_angle"] for d in analyzed_deliveries) / len(analyzed_deliveries) if analyzed_deliveries else 0,
             "icc_compliant_percentage": (sum(1 for d in analyzed_deliveries if d["icc_compliant"]) / len(analyzed_deliveries) * 100) if analyzed_deliveries else 0,
             "most_common_line": analyzed_deliveries[0]["line"] if analyzed_deliveries else "unknown",
             "most_common_length": analyzed_deliveries[0]["length"] if analyzed_deliveries else "unknown",
-            "arm_type": "right_arm_over"
+            "arm_type": analyzed_deliveries[0]["arm_type"] if analyzed_deliveries else "unknown",
+            "bowling_style": analyzed_deliveries[0]["bowling_style"] if analyzed_deliveries else "unknown",
+            "release_height": analyzed_deliveries[0]["release_y"] if analyzed_deliveries else 0,
+            "accuracy_score": sum(1 for d in analyzed_deliveries if d["line"] in ["off_stump", "middle_stump"]) / len(analyzed_deliveries) * 100 if analyzed_deliveries else 0,
+            "recommendations": analyzed_deliveries[0]["recommendations"] if analyzed_deliveries else []
         }
 
         report = {

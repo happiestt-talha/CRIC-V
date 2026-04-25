@@ -90,8 +90,8 @@ class IntegrationService:
             logger.info("   Step 4: Saving analysis to database...")
             
             # Extract metrics
-            bowling_metrics = analysis_result.get("bowling_metrics", {})
-            batting_metrics = analysis_result.get("batting_metrics", {})
+            bowling_metrics = analysis_result.get("bowling_metrics") or analysis_result.get("session_summary", {})
+            batting_metrics = analysis_result.get("batting_metrics") or analysis_result.get("session_summary", {})
             
             # Create or update analysis
             analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
@@ -107,7 +107,7 @@ class IntegrationService:
             if bowling_metrics:
                 analysis.bowling_arm = bowling_metrics.get("bowling_arm")
                 analysis.bowling_style = bowling_metrics.get("bowling_style")
-                analysis.elbow_extension = bowling_metrics.get("elbow_extension")
+                analysis.elbow_extension = bowling_metrics.get("elbow_extension") or bowling_metrics.get("avg_elbow_extension")
                 analysis.release_height = bowling_metrics.get("release_height")
                 analysis.release_speed = bowling_metrics.get("release_speed")
                 analysis.swing_type = bowling_metrics.get("swing_type")
