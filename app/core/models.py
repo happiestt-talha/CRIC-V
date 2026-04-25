@@ -148,6 +148,8 @@ class Session(Base):
         foreign_keys=[coach_id],
     )
 
+    videos = relationship("Video", back_populates="session", cascade="all, delete-orphan")
+    
     analysis = relationship(
         "Analysis",
         back_populates="session",
@@ -191,7 +193,12 @@ class Analysis(Base):
         Integer,
         ForeignKey("sessions.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
+    )
+
+    video_id = Column(
+        Integer,
+        ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=True,
     )
 
     analysis_type = Column(String(50), nullable=False)
@@ -215,6 +222,7 @@ class Analysis(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     session = relationship("Session", back_populates="analysis")
+    video = relationship("Video", back_populates="analysis")
 
     @property
     def bowling_metrics(self):
@@ -250,6 +258,24 @@ class Analysis(Base):
 
     def __repr__(self):
         return f"<Analysis id={self.id} session_id={self.session_id} type={self.analysis_type!r}>"
+
+class Video(Base):
+    __tablename__ = "videos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    file_path = Column(String, nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    file_size_mb = Column(Float, nullable=True)
+    status = Column(String(30), nullable=False, default="uploaded")  # uploaded, analyzing, done, failed
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    session = relationship("Session", back_populates="videos")
+    analysis = relationship("Analysis", back_populates="video", uselist=False, cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Video id={self.id} session_id={self.session_id} filename={self.original_filename!r}>"
 
 class BallTrackingAnalysis(Base):
     __tablename__ = "ball_tracking_analyses"

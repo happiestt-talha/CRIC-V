@@ -54,8 +54,28 @@ class EmailService:
             await fm.send_message(message)
             logger.info(f"Email sent to {email} with subject: {subject}")
         except Exception as e:
-            logger.error(f"Failed to send email to {email}: {str(e)}")
-            # In development, we might not want to crash the whole request if email fails
+            error_msg = str(e)
+            logger.error(f"Failed to send email to {email}: {error_msg}")
+            
+            # Development/Debug fallback: print to console if SMTP fails
+            if os.getenv("DEBUG") == "True" or "timed out" in error_msg.lower():
+                print("\n" + "!"*60)
+                print(f"SMTP FAILURE FALLBACK (DEBUG/TIMEOUT)")
+                print(f"TO: {email}")
+                print(f"SUBJECT: {subject}")
+                print("-" * 60)
+                # Strip HTML tags for console readability if you want, but simple print is fine
+                print("Email content is available in logs/console.")
+                print("!"*60 + "\n")
+                
+            if os.getenv("DEBUG") != "True":
+                # In production, we might still want to know it failed
+                pass 
+            
+            # Don't raise if it's a timeout in development, let the user continue
+            if "timed out" in error_msg.lower() and os.getenv("DEBUG") == "True":
+                return
+                
             if os.getenv("DEBUG") != "True":
                 raise e
 

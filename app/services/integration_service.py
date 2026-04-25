@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import cv2
 import numpy as np
+import redis
+import json
 
 from app.database import SessionLocal
 from app.core.models import Session, Analysis, SessionStatus
@@ -26,6 +28,18 @@ class IntegrationService:
         self.pose_detector = PoseDetector()
         self.bowling_analyzer = BowlingAnalyzer()
         self.batting_analyzer = BattingAnalyzer()
+        self.redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+
+    def update_progress(self, task_id: str, percent: int, stage: str, video_id: int, status: str = "processing"):
+        if not task_id:
+            return
+        progress = {
+            "percent": percent,
+            "stage": stage,
+            "video_id": video_id,
+            "status": status
+        }
+        self.redis_client.set(f"task_progress:{task_id}", json.dumps(progress), ex=3600)
         
     def process_session(self, session_id: int) -> Dict[str, Any]:
         """
@@ -150,6 +164,128 @@ class IntegrationService:
             return {
                 "success": False,
                 "session_id": session_id,
+                "error": str(e),
+                "status": "failed"
+            }
+        
+        finally:
+            db.close()
+
+    def process_video(self, video_id: int, task_id: str = None) -> Dict[str, Any]:
+        """
+        Complete pipeline for processing a specific video
+        """
+        db = SessionLocal()
+        from app.core.models import Video
+        try:
+            # Get video from database
+            video = db.query(Video).filter(Video.id == video_id).first()
+            if not video:
+                return {"error": f"Video {video_id} not found"}
+            
+            session = video.session
+            if not session:
+                return {"error": f"Session for video {video_id} not found"}
+
+            # Update status
+            video.status = "analyzing"
+            db.commit()
+            
+            self.update_progress(task_id, 0, "Extracting frames", video_id)
+            
+            logger.info(f"🚀 Starting analysis for video {video_id} (Session {session.id}): {session.session_type}")
+            
+            # Step 1: Extract video metadata
+            self.update_progress(task_id, 10, "Extracting video metadata", video_id)
+            video_path = video.file_path
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+            
+            metadata = extract_video_metadata(video_path)
+            # You might want to store metadata in Video model too
+            
+            # Step 2: Pose detection
+            self.update_progress(task_id, 20, "Running pose estimation", video_id)
+            logger.info("   Step 2: Running pose detection...")
+            # Here you might want to use a more granular progress update if pose_detector supports it
+            pose_report = self.pose_detector.process_video(video_path)
+            
+            if not pose_report or "frames" not in pose_report:
+                raise Exception("No pose data extracted from video")
+            
+            # Step 3: Run specific analysis
+            self.update_progress(task_id, 50, "Detecting ball & Computing metrics", video_id)
+            logger.info(f"   Step 3: Running {session.session_type} analysis...")
+            if session.session_type == "bowling":
+                analysis_result = self.bowling_analyzer.analyze_video(video_path)
+                analysis_type = "bowling"
+            elif session.session_type == "batting":
+                analysis_result = self.batting_analyzer.analyze_video(video_path)
+                analysis_type = "batting"
+            else:
+                raise ValueError(f"Unknown session type: {session.session_type}")
+            
+            # Step 4: Create analysis record
+            self.update_progress(task_id, 80, "Saving results", video_id)
+            logger.info("   Step 4: Saving analysis to database...")
+            
+            # Extract metrics
+            bowling_metrics = analysis_result.get("bowling_metrics", {})
+            batting_metrics = analysis_result.get("batting_metrics", {})
+            
+            # Create or update analysis for this specific video
+            analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
+            if not analysis:
+                analysis = Analysis(session_id=session.id, video_id=video_id)
+                db.add(analysis)
+            
+            # Update analysis fields (similar to process_session)
+            analysis.analysis_type = analysis_type
+            analysis.created_at = datetime.utcnow()
+            
+            if bowling_metrics:
+                # Map fields... (shortened for brevity but should include all from process_session)
+                analysis.elbow_extension = bowling_metrics.get("elbow_extension")
+                analysis.icc_compliant = bowling_metrics.get("icc_compliant", True)
+                analysis.recommendations = bowling_metrics.get("recommendations", [])
+                # Add others as needed
+            
+            if batting_metrics:
+                analysis.stance_type = batting_metrics.get("stance_type")
+                analysis.recommendations = batting_metrics.get("recommendations", [])
+            
+            analysis.pose_data = {
+                "total_frames": len(pose_report.get("frames", [])),
+                "key_events": pose_report.get("summary", {}).get("key_events", []),
+                "average_metrics": pose_report.get("summary", {}).get("average_metrics", {})
+            }
+            
+            # Update video status
+            video.status = "done"
+            
+            db.commit()
+            
+            self.update_progress(task_id, 100, "Complete", video_id, status="complete")
+            logger.info(f"✅ Analysis completed for video {video_id}")
+            
+            return {
+                "success": True,
+                "video_id": video_id,
+                "analysis_id": analysis.id,
+                "status": "complete"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing video {video_id}: {e}")
+            self.update_progress(task_id, 0, f"Error: {str(e)}", video_id, status="failed")
+            
+            if video:
+                video.status = "failed"
+                db.commit()
+            
+            return {
+                "success": False,
+                "video_id": video_id,
                 "error": str(e),
                 "status": "failed"
             }

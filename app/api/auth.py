@@ -1,6 +1,7 @@
-# app/api/auth.py
+# File: app/api/auth.py
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from typing import Optional
@@ -24,7 +25,9 @@ async def login(
     OAuth2 compatible token login, get an access token for future requests
     Returns tokens in both response body and HTTP-only cookies
     """
-    user = db.query(User).filter(User.username == form_data.username).first()
+    user = db.query(User).filter(
+        or_(User.username == form_data.username, User.email == form_data.username)
+    ).first()
     
     if not user or not security.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(

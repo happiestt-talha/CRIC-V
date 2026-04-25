@@ -1,3 +1,5 @@
+# File: app/api/sessions.py
+
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -6,7 +8,7 @@ import os
 
 from app.core import security, schemas
 from app.database import get_db
-from app.core.models import User, Session as DBSession, Player
+from app.core.models import User, Session as DBSession, Player, Video, Analysis
 from app.services.video_processor import process_video_background
 
 router = APIRouter()
@@ -110,28 +112,98 @@ async def upload_session_video(
         raise HTTPException(status_code=403, detail="Not authorized")
     
     # Save video file
-    video_path = f"data/raw_videos/session_{session_id}_{video_file.filename}"
-    os.makedirs(os.path.dirname(video_path), exist_ok=True)
+    video_dir = f"data/raw_videos/session_{session_id}"
+    os.makedirs(video_dir, exist_ok=True)
+    video_path = os.path.join(video_dir, video_file.filename)
+    
+    # Check for existing file to avoid name collision or just overwrite
+    # For now, let's just write
+    content = await video_file.read()
+    file_size_mb = len(content) / (1024 * 1024)
     
     with open(video_path, "wb") as buffer:
-        content = await video_file.read()
         buffer.write(content)
     
-    # Update session
-    session.video_path = video_path
+    # Create Video record
+    db_video = Video(
+        session_id=session_id,
+        file_path=video_path,
+        original_filename=video_file.filename,
+        file_size_mb=round(file_size_mb, 2),
+        status="uploaded"
+    )
+    db.add(db_video)
+    
+    # Update session status
     session.status = "uploaded"
+    # For backward compatibility, update session.video_path to the latest upload
+    session.video_path = video_path
+    
+    db.commit()
+    db.refresh(db_video)
+    
+    return {
+        "message": "Video uploaded successfully",
+        "video_id": db_video.id,
+        "session_id": session_id,
+        "filename": db_video.original_filename,
+        "status": db_video.status
+    }
+
+@router.get("/{session_id}/videos", response_model=List[schemas.Video])
+async def get_session_videos(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Get all videos for a session
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Check permissions
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    elif current_user.role == "player" and session.player_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    return session.videos
+
+@router.delete("/{session_id}/videos/{video_id}")
+async def delete_session_video(
+    session_id: int,
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Delete a specific video from a session
+    """
+    video = db.query(Video).filter(Video.id == video_id, Video.session_id == session_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Check permissions
+    session = video.session
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Check if analysis has been run
+    analysis_exists = db.query(Analysis).filter(Analysis.video_id == video_id).first()
+    if analysis_exists:
+        raise HTTPException(status_code=400, detail="Cannot delete video: Analysis already exists")
+    
+    # Delete file from disk
+    if os.path.exists(video.file_path):
+        os.remove(video.file_path)
+    
+    # Delete record
+    db.delete(video)
     db.commit()
     
-    # Start processing
-    if background_tasks:
-        background_tasks.add_task(
-            process_video_background,
-            session_id=session_id,
-            video_path=video_path,
-            session_type=session.session_type
-        )
-    
-    return {"message": "Video uploaded and processing started", "session_id": session_id}
+    return {"message": "Video deleted successfully"}
 
 @router.get("/{session_id}/annotated-video")
 async def get_annotated_video(

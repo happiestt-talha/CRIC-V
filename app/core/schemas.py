@@ -97,6 +97,11 @@ class Player(PlayerBase):
     class Config:
         model_config = ConfigDict(from_attributes=True)
 
+class PlayerWithCredentials(Player):
+    username: str
+    temporary_password: str
+    user_id: int
+
 # Session schemas
 class SessionBase(BaseModel):
     session_type: SessionType
@@ -106,6 +111,24 @@ class SessionBase(BaseModel):
 class SessionCreate(SessionBase):
     pass
 
+class VideoBase(BaseModel):
+    session_id: int
+    file_path: str
+    original_filename: Optional[str] = None
+    file_size_mb: Optional[float] = None
+    status: str
+    created_at: datetime
+
+class Video(VideoBase):
+    id: int
+    
+    class Config:
+        model_config = ConfigDict(from_attributes=True)
+
+class VideoCreate(BaseModel):
+    original_filename: str
+    file_size_mb: float
+
 class Session(SessionBase):
     id: int
     coach_id: int
@@ -114,6 +137,7 @@ class Session(SessionBase):
     thumbnail_path: Optional[str] = None
     status: str
     created_at: datetime
+    videos: List[Video] = []
     
     class Config:
         model_config = ConfigDict(from_attributes=True)

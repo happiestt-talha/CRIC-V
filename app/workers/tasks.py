@@ -77,6 +77,67 @@ def process_video_task(self, session_id: int):
     finally:
         db.close()
 
+@celery_app.task(bind=True, name='analyze_video_task')
+def analyze_video_task(self, video_id: int):
+    """
+    Celery task to process a single video
+    """
+    from app.services.integration_service import integration_service
+    
+    task_id = self.request.id
+    return integration_service.process_video(video_id, task_id)
+
+@celery_app.task(bind=True, name='analyze_session_all_task')
+def analyze_session_all_task(self, session_id: int):
+    """
+    Celery task to process all videos in a session sequentially
+    """
+    from app.database import SessionLocal
+    from app.core.models import Session as DBSession, Video
+    from app.services.integration_service import integration_service
+    
+    db = SessionLocal()
+    task_id = self.request.id
+    
+    try:
+        session = db.query(DBSession).filter(DBSession.id == session_id).first()
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+            
+        videos = db.query(Video).filter(Video.session_id == session_id).all()
+        video_count = len(videos)
+        
+        results = []
+        for i, video in enumerate(videos):
+            # Update overall progress for the whole task
+            # We can use a special format or just update the redis key
+            # Actually, the user wants sequential processing.
+            # We'll update the same task_id key but maybe with video info
+            integration_service.update_progress(
+                task_id, 
+                int((i / video_count) * 100), 
+                f"Processing video {i+1} of {video_count}", 
+                video.id
+            )
+            
+            res = integration_service.process_video(video.id, task_id)
+            results.append(res)
+            
+        integration_service.update_progress(task_id, 100, "All videos processed", None, status="complete")
+        
+        return {
+            "status": "SUCCESS",
+            "session_id": session_id,
+            "video_count": video_count,
+            "results": results
+        }
+        
+    except Exception as e:
+        integration_service.update_progress(task_id, 0, f"Error: {str(e)}", None, status="failed")
+        return {"status": "FAILED", "error": str(e)}
+    finally:
+        db.close()
+
 @celery_app.task(name='batch_process_sessions')
 def batch_process_sessions(session_ids: list):
     """

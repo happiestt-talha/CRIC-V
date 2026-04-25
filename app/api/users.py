@@ -1,3 +1,5 @@
+# File: app/api/users.py
+
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -42,7 +44,7 @@ async def get_players(
         query = query.filter(Player.coach_id == current_user.id)
     return query.offset(skip).limit(limit).all()
 
-@router.post("/players/create-with-credentials", response_model=schemas.Player)
+@router.post("/players/create-with-credentials", response_model=schemas.PlayerWithCredentials)
 async def create_player_with_credentials(
     player_data: schemas.PlayerCreate,
     background_tasks: BackgroundTasks,
@@ -110,23 +112,16 @@ async def create_player_with_credentials(
         temp_password
     )
     
-    # We'll return the player object as per schema, 
-    # but the coach needs the credentials too.
-    # The return type for this endpoint could be a custom schema to include credentials.
-    # However, the user said: "Return: { username, temporary_password, player_id, user_id }"
-    
-    # Let's check if we should return a different model. 
-    # For now, I'll keep the return as requested in a dict (FastAPI will handle it if not matching schema exactly, but better to fix schema)
     return {
-        "username": db_user.username,
-        "temporary_password": temp_password,
-        "player_id": db_player.id,
-        "user_id": db_user.id,
+        "id": db_player.id,
+        "coach_id": db_player.coach_id,
         "full_name": db_player.full_name,
         "age": db_player.age,
         "batting_hand": db_player.batting_hand,
         "bowling_style": db_player.bowling_style,
-        "coach_id": db_player.coach_id
+        "username": db_user.username,
+        "temporary_password": temp_password,
+        "user_id": db_user.id
     }
 
 @router.post("/players", response_model=schemas.Player)

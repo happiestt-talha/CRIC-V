@@ -1,3 +1,5 @@
+# File: app/api/analysis.py
+
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -6,7 +8,13 @@ from app.core import models, schemas, security
 from app.database import get_db
 from app.core.models import User, Session as DBSession, Analysis, Player
 from app.services.video_processor import process_video_background
+from app.workers.tasks import analyze_video_task, analyze_session_all_task
 from app.analytics.bowling_insights import BowlingInsights
+import redis
+import json
+import asyncio
+from fastapi.responses import StreamingResponse
+import os
 from app.analytics.batting_insights import BattingInsights
 
 bowling_insights = BowlingInsights()
@@ -128,6 +136,75 @@ async def trigger_manual_analysis(
     )
     
     return {"message": "Analysis triggered", "session_id": session_id}
+
+@router.post("/analyze/video/{video_id}")
+async def trigger_video_analysis(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Trigger analysis for a specific video
+    """
+    video = db.query(models.Video).filter(models.Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Check permissions
+    if current_user.role == "coach" and video.session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    task = analyze_video_task.delay(video_id)
+    return {"task_id": task.id, "video_id": video_id}
+
+@router.post("/analyze/session/{session_id}/all")
+async def trigger_session_all_analysis(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Trigger analysis for all videos in a session
+    """
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Check permissions
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if not session.videos:
+        raise HTTPException(status_code=400, detail="No videos in this session")
+        
+    task = analyze_session_all_task.delay(session_id)
+    return {"task_id": task.id, "session_id": session_id, "video_count": len(session.videos)}
+
+async def event_generator(task_id: str):
+    r = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+    retry_count = 0
+    while True:
+        data = r.get(f"task_progress:{task_id}")
+        if data:
+            retry_count = 0
+            yield f"data: {data.decode('utf-8')}\n\n"
+            parsed = json.loads(data)
+            if parsed.get("status") in ("complete", "failed"):
+                break
+        else:
+            retry_count += 1
+            if retry_count > 60: # 60 seconds timeout
+                yield f"data: {json.dumps({'status': 'failed', 'stage': 'Timeout - no response from worker'})}\n\n"
+                break
+        await asyncio.sleep(1)
+
+@router.get("/progress/{task_id}")
+async def stream_progress(task_id: str):
+    return StreamingResponse(
+        event_generator(task_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 @router.get("/insights/batting/{player_id}")
 async def get_batting_insights(
