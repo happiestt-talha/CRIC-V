@@ -201,14 +201,24 @@ class BowlingAnalyzer:
     def _save_to_db(self, session_id, report):
         db = SessionLocal()
         try:
-            analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
-            if not analysis:
-                analysis = Analysis(session_id=session_id)
-                db.add(analysis)
-            
-            analysis.analysis_type = "bowling"
+            # Delete old records to avoid duplicates
+            db.query(Analysis).filter(Analysis.session_id == session_id).delete()
+            db.query(Delivery).filter(Delivery.session_id == session_id).delete()
+
             summary = report["session_summary"]
-            analysis.icc_compliant = summary["icc_compliant_percentage"] == 100
+            analysis = Analysis(
+                session_id=session_id,
+                analysis_type="bowling",
+                elbow_extension=summary["avg_elbow_extension"],
+                release_speed=summary["avg_speed_kph"],
+                release_height=summary["release_height"],
+                accuracy_score=summary["accuracy_score"],
+                bowling_style=summary["bowling_style"],
+                arm_type=summary["arm_type"],
+                icc_compliant=summary["icc_compliant_percentage"] >= 90,
+                recommendations=summary["recommendations"]
+            )
+            db.add(analysis)
             
             # Save deliveries
             for d in report["deliveries"]:
@@ -216,16 +226,21 @@ class BowlingAnalyzer:
                     session_id=session_id,
                     delivery_number=d["delivery_number"],
                     speed_kmh=d["ball_speed_kph"],
+                    pitch_landing_x=d["pitch_x"],
+                    pitch_landing_y=d["pitch_y"],
                     line=d["line"],
                     length=d["length"],
                     elbow_extension=d["elbow_angle"],
-                    release_point_y=d["pitch_y"]
+                    shoulder_angle=d.get("shoulder_alignment", 0.0),
+                    release_frame=d["release_frame"],
+                    pitch_frame=d.get("pitch_frame", 0),
+                    is_no_ball=not d["icc_compliant"]
                 )
                 db.add(delivery)
-                # Actually, I should check the column names I saw in models.py
-                # Line 264: speed_kmh = Column(Float)
             
-            # I'll just use the correct names from models.py
             db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Error saving analysis to DB: {e}")
         finally:
             db.close()

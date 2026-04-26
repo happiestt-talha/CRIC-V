@@ -367,6 +367,11 @@ class Delivery(Base):
     
     # Pose metrics at delivery
     elbow_extension = Column(Float)
+    shoulder_angle = Column(Float)     # added
+    release_frame = Column(Integer)    # added
+    pitch_frame = Column(Integer)      # added
+    is_no_ball = Column(Boolean, default=False) # added
+    
     release_point_x = Column(Float)
     release_point_y = Column(Float)
     release_point_z = Column(Float)

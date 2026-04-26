@@ -190,6 +190,7 @@ class Analysis(AnalysisBase):
     bowling_metrics: Optional[BowlingMetrics] = None
     batting_metrics: Optional[BattingMetrics] = None
     pose_data: Optional[Dict[str, Any]] = None
+    delivery_count: Optional[int] = 0
     created_at: datetime
     
     class Config:

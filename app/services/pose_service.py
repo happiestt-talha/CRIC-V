@@ -80,62 +80,88 @@ class PoseDetector:
         Process video and extract pose landmarks
         Returns: List of frames with landmarks
         """
-        # If detector is not available, return mock data
-        if self.detector is None:
+        # For VIDEO mode, MediaPipe requires a new detector instance per video 
+        # to reset the internal state and timestamp tracking.
+        detector = self._create_detector()
+        
+        if detector is None:
             return self._create_mock_report()
         
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0: fps = 30.0
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
         frames_data = []
         frame_number = 0
         
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success:
-                break
+        try:
+            while cap.isOpened():
+                success, frame = cap.read()
+                if not success:
+                    break
+                    
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Convert to MediaPipe Image
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-            
-            # Calculate timestamp in milliseconds
-            timestamp_ms = int((frame_number / fps) * 1000) if fps > 0 else frame_number * 33
-            
-            # Detect pose landmarks
-            detection_result = self.detector.detect_for_video(mp_image, timestamp_ms)
-            
-            frame_data = {
-                "frame_number": frame_number,
-                "timestamp": frame_number / fps if fps > 0 else 0,
-                "landmarks": []
-            }
-            
-            if detection_result.pose_landmarks:
-                # Take the first pose (we set num_poses=1)
-                landmarks = self._extract_landmarks(detection_result.pose_landmarks[0])
-                frame_data["landmarks"] = landmarks
+                # Convert to MediaPipe Image
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
                 
-                # Calculate key metrics
-                if landmarks:
-                    frame_data["metrics"] = self._calculate_frame_metrics(landmarks)
-            
-            frames_data.append(frame_data)
-            frame_number += 1
-            
-            # Print progress every 50 frames to reduce noise
-            if frame_number % 50 == 0:
-                logger.info(f"Processed {frame_number}/{frame_count} frames...")
-        
-        cap.release()
+                # Calculate timestamp in milliseconds - must be strictly increasing
+                timestamp_ms = int(round(frame_number * 1000 / fps))
+                
+                # Detect pose landmarks
+                detection_result = detector.detect_for_video(mp_image, timestamp_ms)
+                
+                frame_data = {
+                    "frame_number": frame_number,
+                    "timestamp": frame_number / fps,
+                    "landmarks": []
+                }
+                
+                if detection_result.pose_landmarks:
+                    # Take the first pose
+                    landmarks = self._extract_landmarks(detection_result.pose_landmarks[0])
+                    frame_data["landmarks"] = landmarks
+                    
+                    if landmarks:
+                        frame_data["metrics"] = self._calculate_frame_metrics(landmarks)
+                
+                frames_data.append(frame_data)
+                frame_number += 1
+                
+                if frame_number % 50 == 0:
+                    logger.info(f"Processed {frame_number}/{frame_count} frames...")
+        finally:
+            cap.release()
+            detector.close()
         
         if output_json:
             return self._create_pose_report(frames_data, fps, frame_count)
         
         return frames_data
+
+    def _create_detector(self):
+        """Helper to create a new MediaPipe detector instance"""
+        if not MP_AVAILABLE:
+            return None
+            
+        try:
+            base_options = python.BaseOptions(model_asset_path=self.model_path)
+            options = vision.PoseLandmarkerOptions(
+                base_options=base_options,
+                running_mode=vision.RunningMode.VIDEO,
+                num_poses=1,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+                output_segmentation_masks=False
+            )
+            return vision.PoseLandmarker.create_from_options(options)
+        except Exception as e:
+            logger.error(f"Failed to create MediaPipe detector: {e}")
+            return None
+
     
     def _extract_landmarks(self, pose_landmarks) -> List[Dict]:
         """Extract landmarks with coordinates and visibility"""

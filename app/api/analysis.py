@@ -51,7 +51,22 @@ async def get_session_analysis(
         else:
              raise HTTPException(status_code=202, detail="Analysis is still in progress")
     
-    return analysis
+    # Add delivery_count
+    delivery_count = db.query(models.Delivery).filter(models.Delivery.session_id == session_id).count()
+    
+    # Return as dict to include delivery_count (which is in schema but not in DB model)
+    analysis_dict = {
+        "id": analysis.id,
+        "session_id": analysis.session_id,
+        "analysis_type": analysis.analysis_type,
+        "bowling_metrics": analysis.bowling_metrics,
+        "batting_metrics": analysis.batting_metrics,
+        "pose_data": analysis.pose_data,
+        "delivery_count": delivery_count,
+        "created_at": analysis.created_at
+    }
+    
+    return analysis_dict
 
 @router.get("/player/{player_id}/bowling", response_model=List[schemas.Analysis])
 async def get_player_bowling_analysis(
@@ -213,18 +228,17 @@ async def get_batting_insights(
     current_user: User = Depends(security.get_current_user)
 ):
     """Get advanced batting insights for a player"""
-    strike_rate = batting_insights.strike_rate(player_id, db)
-    zones = batting_insights.scoring_zones(player_id, db)
-    shot_ratio = batting_insights.shot_ratio(player_id, db)
-    timing = batting_insights.timing_consistency(player_id, db)
+    # Initialize insights service
+    insights_service = BattingInsights()
     
-    return {
-        "player_id": player_id,
-        "strike_rate": strike_rate,
-        "scoring_zones": zones,
-        "shot_ratio": shot_ratio,
-        "timing_consistency": timing,
-    }
+    # Gather data
+    insights_data = insights_service.get_batting_insights(player_id, db)
+    
+    if "error" in insights_data:
+        raise HTTPException(status_code=404, detail=insights_data["error"])
+        
+    return insights_data
+
 
 @router.get("/insights/bowling/{player_id}", response_model=schemas.BowlingInsightsResponse)
 async def get_bowling_insights(
@@ -252,18 +266,17 @@ async def get_bowling_insights(
         )
 
     # Initialize insights service
-    insights = BowlingInsights()
+    insights_service = BowlingInsights()
 
     # Gather data
-    speed_stats = insights.speed_consistency(player_id, db)
-    heatmap = insights.line_length_heatmap(player_id, db)
+    insights_data = insights_service.get_bowling_insights(player_id, db)
+    
+    if "error" in insights_data:
+        raise HTTPException(status_code=404, detail=insights_data["error"])
 
     # Build response (matches schema BowlingInsightsResponse)
-    return {
-        "player_id": player_id,
-        "speed_consistency": speed_stats,
-        "line_length_heatmap": heatmap,
-    }
+    return insights_data
+
 
 # --- Feedback Endpoints ---
 
@@ -373,3 +386,94 @@ async def update_feedback(
         **db_feedback.__dict__,
         "coach_name": current_user.username
     }
+
+@router.get("/session/{session_id}/deliveries")
+def get_session_deliveries(
+    session_id: int, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Returns all bowling delivery records for a session
+    """
+    deliveries = db.query(models.Delivery).filter(
+        models.Delivery.session_id == session_id
+    ).order_by(models.Delivery.id).all()
+    
+    # Map to include computed fields
+    results = []
+    for d in deliveries:
+        results.append({
+            "id": d.id,
+            "delivery_number": d.delivery_number,
+            "ball_speed_kph": d.speed_kmh,
+            "elbow_angle": d.elbow_extension,
+            "shoulder_angle": d.shoulder_angle,
+            "pitch_location_x": d.pitch_landing_x,
+            "pitch_location_y": d.pitch_landing_y,
+            "release_frame": d.release_frame or 0,
+            "pitch_frame": d.pitch_frame or 0,
+            "is_no_ball": d.is_no_ball or False,
+            "release_timestamp_seconds": (d.release_frame or 0) / 30.0,
+            "created_at": d.created_at
+        })
+        
+    return results
+
+@router.get("/session/{session_id}/deliveries/{delivery_id}/clip")
+async def get_delivery_clip(
+    session_id: int,
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Returns a short video clip (±2 seconds around release_frame)
+    """
+    import subprocess
+    
+    delivery = db.query(models.Delivery).filter(
+        models.Delivery.id == delivery_id,
+        models.Delivery.session_id == session_id
+    ).first()
+    
+    if not delivery:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+        
+    session = delivery.session
+    if not session.video_path or not os.path.exists(session.video_path):
+        raise HTTPException(status_code=404, detail="Source video not found")
+        
+    release_frame = delivery.release_frame
+    if release_frame is None:
+        raise HTTPException(status_code=400, detail="Release frame data missing for this delivery")
+        
+    # Cache path
+    clip_dir = "data/processed/clips"
+    os.makedirs(clip_dir, exist_ok=True)
+    clip_path = os.path.join(clip_dir, f"session_{session_id}_delivery_{delivery_id}.mp4")
+    
+    if os.path.exists(clip_path):
+        return FileResponse(clip_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+        
+    # Extract using ffmpeg
+    fps = 30 # Default or fetch from video
+    start_time = max(0, (release_frame / fps) - 2)
+    duration = 4
+    
+    try:
+        cmd = [
+            'ffmpeg', '-y',
+            '-ss', str(start_time),
+            '-i', session.video_path,
+            '-t', str(duration),
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+            '-c:a', 'copy',
+            clip_path
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+    except Exception as e:
+        print(f"FFmpeg extraction failed: {e}")
+        raise HTTPException(status_code=503, detail="Clip extraction not available")
+        
+    return FileResponse(clip_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})

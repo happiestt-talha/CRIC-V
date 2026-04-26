@@ -208,39 +208,61 @@ async def delete_session_video(
 @router.get("/{session_id}/annotated-video")
 async def get_annotated_video(
     session_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    db: Session = Depends(get_db)
+    # Auth intentionally removed — video files must be publicly streamable
+    # because browser <video> elements cannot send Authorization headers
 ):
-    """
-    Returns the processed annotated video file
-    """
     session = db.query(DBSession).filter(DBSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    # Check permissions
-    if current_user.role == "coach" and session.coach_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    elif current_user.role == "player" and session.player_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    video_path = f"data/processed/annotated_{session_id}.mp4"
+    if not session.annotated_video_path:
+        raise HTTPException(status_code=404, detail="Annotated video not ready. Run analysis first.")
+    
+    # Normalize path separators for cross-platform compatibility
+    video_path = session.annotated_video_path.replace('\\', os.sep).replace('/', os.sep)
     
     if not os.path.exists(video_path):
-        # We could trigger generation here if not yet generated, 
-        # but process_video_background should have handled it.
-        # If it's missing, maybe still processing or failed.
-        if session.status == "processing":
-            raise HTTPException(status_code=202, detail="Video is still being processed")
-        else:
-            raise HTTPException(status_code=404, detail="Annotated video not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Annotated video file missing from disk. Re-run analysis to regenerate."
+        )
+    
+    return FileResponse(
+        path=video_path,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        }
+    )
 
-    response = FileResponse(video_path, media_type="video/mp4", filename=f"annotated_session_{session_id}.mp4")
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:3000"
-    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    response.headers["Access-Control-Expose-Headers"] = "Content-Range, Accept-Ranges"
-    return response
+@router.get("/{session_id}/videos/{video_id}/stream")
+async def stream_original_video(
+    session_id: int,
+    video_id: int,
+    db: Session = Depends(get_db)
+):
+    from app.core.models import Video as VideoModel
+    video = db.query(VideoModel).filter(
+        VideoModel.id == video_id,
+        VideoModel.session_id == session_id
+    ).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    video_path = video.file_path.replace('\\', os.sep).replace('/', os.sep)
+    
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video file missing from disk")
+    
+    return FileResponse(
+        path=video_path,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        }
+    )
 @router.get("/{session_id}/delete-preview")
 async def get_session_delete_preview(
     session_id: int,
