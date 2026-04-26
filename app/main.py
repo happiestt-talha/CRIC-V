@@ -60,9 +60,11 @@ app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 os.makedirs("data/raw_videos", exist_ok=True)
 os.makedirs("data/thumbnails", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
+os.makedirs("data/avatars", exist_ok=True)
 
 # Mount static directories
 app.mount("/data/thumbnails", StaticFiles(directory="data/thumbnails"), name="thumbnails")
+app.mount("/avatars", StaticFiles(directory="data/avatars"), name="avatars")
 
 @app.post("/upload", response_model=schemas.Session)
 async def upload_video(

@@ -68,9 +68,19 @@ class User(UserBase):
     email_verified: bool
     must_change_password: bool
     created_at: datetime
+    avatar_url: Optional[str] = None
+    full_name: Optional[str] = None
     
     class Config:
         model_config = ConfigDict(from_attributes=True)
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+
+class AvatarResponse(BaseModel):
+    avatar_url: str
 
 # Token schemas
 class Token(BaseModel):

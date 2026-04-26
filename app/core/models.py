@@ -1,4 +1,5 @@
 import enum
+import os
 from sqlalchemy import (
     Column, Integer, String, Float, DateTime, Boolean,
     ForeignKey, JSON, Text
@@ -28,6 +29,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     refresh_token_hash = Column(String, nullable=True)
+    avatar_path = Column(String, nullable=True)
     
     # Auth redesign columns
     email_verified = Column(Boolean, default=False, nullable=False)
@@ -66,6 +68,18 @@ class User(Base):
 
     def __repr__(self):
         return f"<User id={self.id} username={self.username!r}>"
+
+    @property
+    def avatar_url(self) -> Optional[str]:
+        if self.avatar_path:
+            return f"/avatars/{os.path.basename(self.avatar_path)}"
+        return None
+
+    @property
+    def full_name(self) -> Optional[str]:
+        if self.player:
+            return self.player.full_name
+        return None
 
 
 class Player(Base):

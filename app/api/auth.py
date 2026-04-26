@@ -11,6 +11,9 @@ from app.core import security, schemas
 from app.database import get_db
 from app.core.models import User, Player
 from app.services.email_service import email_service
+import os
+import shutil
+from fastapi import File, UploadFile
 
 router = APIRouter()
 
@@ -144,7 +147,7 @@ async def register(
     
     return {"message": "Registration successful. Please check your email to verify your account."}
 
-@router.post("/change-password")
+@router.put("/change-password")
 async def change_password(
     request: schemas.ChangePasswordRequest,
     current_user: User = Depends(security.get_current_user),
@@ -155,13 +158,98 @@ async def change_password(
     Sets must_change_password = False
     """
     if not security.verify_password(request.current_password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect current password")
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
     
     current_user.hashed_password = security.get_password_hash(request.new_password)
     current_user.must_change_password = False
     db.commit()
     
     return {"message": "Password changed successfully."}
+
+@router.put("/profile", response_model=schemas.User)
+async def update_profile(
+    user_update: schemas.UserUpdate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(security.get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user profile information
+    """
+    updated_email = False
+    
+    if user_update.username and user_update.username != current_user.username:
+        # Check uniqueness
+        existing = db.query(User).filter(User.username == user_update.username).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Username already taken.")
+        current_user.username = user_update.username
+        
+    if user_update.email and user_update.email != current_user.email:
+        # Check uniqueness
+        existing = db.query(User).filter(User.email == user_update.email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use.")
+        
+        current_user.email = user_update.email
+        current_user.email_verified = False
+        current_user.is_active = False # Deactivate until verified
+        updated_email = True
+        
+        # Send new verification email
+        verification_token = secrets.token_urlsafe(32)
+        current_user.email_verification_token = verification_token
+        current_user.verification_sent_at = datetime.utcnow()
+        background_tasks.add_task(email_service.send_verification_email, current_user.email, verification_token)
+
+    if user_update.full_name and current_user.role == "player":
+        if current_user.player:
+            current_user.player.full_name = user_update.full_name
+        else:
+            # Should not happen for player role, but safety first
+            player = Player(user_id=current_user.id, full_name=user_update.full_name)
+            db.add(player)
+
+    db.commit()
+    db.refresh(current_user)
+    
+    if updated_email:
+        # User will be logged out in frontend due to 401 on next request or explicit redirect
+        return current_user # Still return the user, frontend handles the "Please verify" message
+        
+    return current_user
+
+@router.post("/avatar", response_model=schemas.AvatarResponse)
+async def upload_avatar(
+    avatar: UploadFile = File(...),
+    current_user: User = Depends(security.get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload and save user avatar
+    """
+    # Validation
+    if avatar.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, and WebP are allowed.")
+    
+    # Check file size (2MB)
+    contents = await avatar.read()
+    if len(contents) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 2MB.")
+    
+    # Save file
+    os.makedirs("data/avatars", exist_ok=True)
+    extension = avatar.filename.split(".")[-1]
+    filename = f"{current_user.id}.{extension}"
+    file_path = os.path.join("data/avatars", filename)
+    
+    with open(file_path, "wb") as f:
+        f.write(contents)
+    
+    current_user.avatar_path = file_path
+    db.commit()
+    
+    return {"avatar_url": current_user.avatar_url}
 
 @router.post("/refresh", response_model=schemas.Token)
 async def refresh_token(
