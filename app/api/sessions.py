@@ -241,3 +241,179 @@ async def get_annotated_video(
     response.headers["Access-Control-Allow-Headers"] = "*"
     response.headers["Access-Control-Expose-Headers"] = "Content-Range, Accept-Ranges"
     return response
+@router.get("/{session_id}/delete-preview")
+async def get_session_delete_preview(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Get a summary of what will be deleted for a session
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Check permissions
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    from sqlalchemy import func
+    from app.core.models import Feedback, Video, Analysis
+    
+    has_analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first() is not None
+    has_feedback = db.query(Feedback).filter(Feedback.session_id == session_id).first() is not None
+    video_count = db.query(Video).filter(Video.session_id == session_id).count()
+    total_size_mb = db.query(func.sum(Video.file_size_mb)).filter(Video.session_id == session_id).scalar() or 0.0
+    
+    # Check for active celery tasks
+    is_currently_processing = session.status in ["processing", "analyzing"]
+    
+    return {
+        "session_id": session_id,
+        "has_analysis": has_analysis,
+        "has_feedback": has_feedback,
+        "video_count": video_count,
+        "total_size_mb": round(float(total_size_mb), 2),
+        "is_currently_processing": is_currently_processing
+    }
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(security.get_current_user)
+):
+    """
+    Delete a session and all its associated data (files, records, tasks)
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Check permissions
+    if current_user.role == "coach" and session.coach_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You are not authorized to delete this session.")
+    
+    import redis
+    import json
+    from app.workers.tasks import celery_app
+    from app.core.models import Video, Analysis, Feedback, Delivery, BallTrackingAnalysis
+    
+    try:
+        # 1. Cancel any running Celery tasks
+        r = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+        task_keys = r.keys("task_progress:*")
+        for key in task_keys:
+            data = r.get(key)
+            if data:
+                try:
+                    progress = json.loads(data)
+                    # Check if this task is for our session
+                    # We need to find the task_id from the key: task_progress:TASK_ID
+                    task_id = key.decode('utf-8').split(':')[-1]
+                    
+                    # We might not have session_id in all progress objects, 
+                    # but if we do, check it. Or if it has video_id, check if video belongs to session.
+                    is_match = False
+                    if progress.get("session_id") == session_id:
+                        is_match = True
+                    elif progress.get("video_id"):
+                        video = db.query(Video).filter(Video.id == progress.get("video_id"), Video.session_id == session_id).first()
+                        if video:
+                            is_match = True
+                    
+                    if is_match and progress.get("status") == "processing":
+                        celery_app.control.revoke(task_id, terminate=True)
+                        r.delete(key)
+                except:
+                    continue
+
+        # 2. Delete video files from disk
+        videos = db.query(Video).filter(Video.session_id == session_id).all()
+        for video in videos:
+            try:
+                if os.path.exists(video.file_path):
+                    os.remove(video.file_path)
+            except Exception as e:
+                print(f"Warning: Failed to delete file {video.file_path}: {e}")
+
+        # Delete session.video_path if it exists and is different from video records
+        if session.video_path and os.path.exists(session.video_path):
+            try:
+                os.remove(session.video_path)
+            except: pass
+
+        # 3. Delete annotated/processed video files
+        annotated_path = f"data/processed/annotated_{session_id}.mp4"
+        if os.path.exists(annotated_path):
+            try:
+                os.remove(annotated_path)
+            except: pass
+            
+        if session.annotated_video_path and os.path.exists(session.annotated_video_path):
+            try:
+                os.remove(session.annotated_video_path)
+            except: pass
+
+        # 4. Delete thumbnail files
+        if session.thumbnail_path and os.path.exists(session.thumbnail_path):
+            try:
+                os.remove(session.thumbnail_path)
+            except: pass
+            
+        # Also check data/thumbnails/ for any other related thumbs
+        thumbnail_dir = "data/thumbnails"
+        if os.path.exists(thumbnail_dir):
+            for f in os.listdir(thumbnail_dir):
+                if f.startswith(f"thumb_session_{session_id}"):
+                    try:
+                        os.remove(os.path.join(thumbnail_dir, f))
+                    except: pass
+
+        # 5. Delete DB records in order (to respect foreign key constraints)
+        # Order: Metrics -> Deliveries -> Shots -> Feedback -> PoseData -> Videos -> Session
+        
+        # metrics (using raw SQL in case table exists but no model)
+        from sqlalchemy import text
+        try:
+            db.execute(text("DELETE FROM metrics WHERE delivery_id IN (SELECT id FROM deliveries WHERE session_id = :sid)"), {"sid": session_id})
+            db.execute(text("DELETE FROM metrics WHERE shot_id IN (SELECT id FROM shots WHERE session_id = :sid)"), {"sid": session_id})
+        except: pass
+
+        # bowling_deliveries
+        db.query(Delivery).filter(Delivery.session_id == session_id).delete()
+        
+        # shots
+        try:
+            db.execute(text("DELETE FROM shots WHERE session_id = :sid"), {"sid": session_id})
+        except: pass
+        
+        # feedback
+        db.query(Feedback).filter(Feedback.session_id == session_id).delete()
+        
+        # pose_data (often a column in Analysis, but checking if table exists)
+        try:
+            # If it's a separate table as hinted by user
+            db.execute(text("DELETE FROM pose_data WHERE video_id IN (SELECT id FROM videos WHERE session_id = :sid)"), {"sid": session_id})
+        except: pass
+        
+        # Ball tracking (extra cleanup)
+        db.query(BallTrackingAnalysis).filter(BallTrackingAnalysis.session_id == session_id).delete()
+        
+        # Analysis
+        db.query(Analysis).filter(Analysis.session_id == session_id).delete()
+        
+        # Videos
+        db.query(Video).filter(Video.session_id == session_id).delete()
+        
+        # Session itself
+        db.delete(session)
+        
+        db.commit()
+        return { "message": "Session deleted successfully.", "session_id": session_id }
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting session: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete session. Please try again.")

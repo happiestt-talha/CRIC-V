@@ -87,7 +87,7 @@ async def delete_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(security.get_current_user)
 ):
-    """Delete a session and all its associated files and data"""
+    """Delete a session and all its associated files and data (Admin only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
         
@@ -95,21 +95,79 @@ async def delete_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    # Delete physical files
-    if session.video_path and os.path.exists(session.video_path):
-        os.remove(session.video_path)
+    import redis
+    import json
+    from app.workers.tasks import celery_app
+    from app.core.models import Video, Analysis, Feedback, Delivery, BallTrackingAnalysis
+    from sqlalchemy import text
     
-    annotated_path = f"data/processed/annotated_{session_id}.mp4"
-    if os.path.exists(annotated_path):
-        os.remove(annotated_path)
+    try:
+        # 1. Cancel any running Celery tasks
+        r = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+        task_keys = r.keys("task_progress:*")
+        for key in task_keys:
+            data = r.get(key)
+            if data:
+                try:
+                    progress = json.loads(data)
+                    task_id = key.decode('utf-8').split(':')[-1]
+                    is_match = False
+                    if progress.get("session_id") == session_id:
+                        is_match = True
+                    elif progress.get("video_id"):
+                        video = db.query(Video).filter(Video.id == progress.get("video_id"), Video.session_id == session_id).first()
+                        if video:
+                            is_match = True
+                    
+                    if is_match and progress.get("status") == "processing":
+                        celery_app.control.revoke(task_id, terminate=True)
+                        r.delete(key)
+                except: continue
+
+        # 2. Delete physical files
+        videos = db.query(Video).filter(Video.session_id == session_id).all()
+        for video in videos:
+            if os.path.exists(video.file_path):
+                try: os.remove(video.file_path)
+                except: pass
+
+        if session.video_path and os.path.exists(session.video_path):
+            try: os.remove(session.video_path)
+            except: pass
         
-    if session.thumbnail_path and os.path.exists(session.thumbnail_path):
-        os.remove(session.thumbnail_path)
+        annotated_path = f"data/processed/annotated_{session_id}.mp4"
+        if os.path.exists(annotated_path):
+            try: os.remove(annotated_path)
+            except: pass
+            
+        if session.thumbnail_path and os.path.exists(session.thumbnail_path):
+            try: os.remove(session.thumbnail_path)
+            except: pass
+            
+        # 3. Delete DB records
+        try:
+            db.execute(text("DELETE FROM metrics WHERE delivery_id IN (SELECT id FROM deliveries WHERE session_id = :sid)"), {"sid": session_id})
+            db.execute(text("DELETE FROM metrics WHERE shot_id IN (SELECT id FROM shots WHERE session_id = :sid)"), {"sid": session_id})
+        except: pass
+
+        db.query(Delivery).filter(Delivery.session_id == session_id).delete()
+        try: db.execute(text("DELETE FROM shots WHERE session_id = :sid"), {"sid": session_id})
+        except: pass
+        db.query(Feedback).filter(Feedback.session_id == session_id).delete()
+        try: db.execute(text("DELETE FROM pose_data WHERE video_id IN (SELECT id FROM videos WHERE session_id = :sid)"), {"sid": session_id})
+        except: pass
+        db.query(BallTrackingAnalysis).filter(BallTrackingAnalysis.session_id == session_id).delete()
+        db.query(Analysis).filter(Analysis.session_id == session_id).delete()
+        db.query(Video).filter(Video.session_id == session_id).delete()
         
-    # DB cascade should handle Analysis and Delivery, but let's be safe if needed
-    db.delete(session)
-    db.commit()
-    return {"message": "Session and all associated data deleted successfully"}
+        db.delete(session)
+        db.commit()
+        return {"message": "Session and all associated data deleted successfully"}
+
+    except Exception as e:
+        db.rollback()
+        print(f"Admin delete failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete session.")
 
 @router.get("/sessions")
 async def get_admin_sessions(
