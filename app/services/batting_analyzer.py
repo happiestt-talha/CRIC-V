@@ -1,3 +1,4 @@
+#app/services/batting_analyzer.py
 import os
 import cv2
 import numpy as np
@@ -95,10 +96,7 @@ class BattingAnalyzer:
             "shots": analyzed_shots
         }
 
-        # 5. Save to Database
-        if session_id:
-            self._save_to_db(session_id, report)
-
+        # Do NOT call _save_to_db here — integration_service handles all DB writes
         return report
 
     def _segment_shots(self, frames: List[Dict]) -> List[Dict]:
@@ -156,12 +154,19 @@ class BattingAnalyzer:
             analysis.analysis_type = "batting"
             
             summary = report["session_summary"]
+            shots = report.get("shots", [])
+            analysis.bat_angle = (
+                sum(s["bat_angle"] for s in shots if s.get("bat_angle") is not None) / len(shots)
+                if shots else None
+            )
+            analysis.head_stillness = (
+                sum(s.get("quality_score", 0) for s in shots) / len(shots)
+                if shots else None
+            )
+            analysis.shot_selection = shots[0].get("shot_type") if shots else None
             analysis.stance_type = summary["stance_type"]
-            analysis.bat_angle = summary["average_quality_score"]
-            # Map top level metrics to JSON recommendations if needed or individual columns
-            analysis.weight_distribution = report["shots"][0]["weight_distribution"] if report["shots"] else {}
-            analysis.head_position = report["shots"][0]["head_position"] if report["shots"] else {}
-            analysis.recommendations = report["shots"][0]["recommendations"] if report["shots"] else []
+            analysis.weight_distribution = shots[0].get("weight_distribution") if shots else None
+            analysis.recommendations = shots[0].get("recommendations", []) if shots else []
             
             # Update Session Status
             from app.core.models import Session

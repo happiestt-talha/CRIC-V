@@ -15,22 +15,9 @@ class BattingInsights:
         ).all()
 
         if not analyses:
-            return {"player_id": player_id, "error": "No batting data found"}
+            return self._get_empty_insights(player_id)
 
         # Extract shot results from all analyses
-        # Assuming Analysis.batting_metrics stores some summary or we look at deliveries
-        # Let's use Deliveries as the source of truth for shot types if available, 
-        # or aggregate from the Analysis.batting_metrics JSON.
-        
-        all_shots = []
-        for a in analyses:
-            metrics = a.batting_metrics or {}
-            # In our new BattingAnalyzer, we return a list of shots. 
-            # If we store that in a separate table later, great. 
-            # For now, let's assume batting_metrics has the aggregated data.
-            pass
-        
-        # Mocking aggregation logic for the required structure
         shot_types = ["cover_drive", "straight_drive", "pull_shot", "cut_shot", "defensive", "sweep_shot"]
         shot_dist = {}
         total_shots = 0
@@ -86,4 +73,20 @@ class BattingInsights:
             "trends": trends,
             "session_comparison": session_comp,
             "recommendations": recommendations
+        }
+
+    def _get_empty_insights(self, player_id):
+        return {
+            "player_id": player_id,
+            "shot_distribution": {},
+            "technique_scores": {
+                "avg_quality_score": 0, "avg_footwork_score": 0, "avg_timing_score": 0,
+                "stance_consistency": 0, "head_stability_score": 0
+            },
+            "trends": {
+                "quality_trend": "stable", "most_improved_shot": "N/A",
+                "weakest_shot": "N/A", "strongest_shot": "N/A"
+            },
+            "session_comparison": [],
+            "recommendations": ["No batting data found. Record some sessions to see insights."]
         }

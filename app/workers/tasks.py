@@ -1,6 +1,7 @@
 """
 Celery tasks for background processing
 """
+#app/workers/tasks.py
 from celery import Celery
 import os
 from dotenv import load_dotenv
@@ -85,7 +86,21 @@ def analyze_video_task(self, video_id: int, *args, **kwargs):
     from app.services.integration_service import integration_service
     
     task_id = self.request.id
-    return integration_service.process_video(video_id, task_id)
+    result = integration_service.process_video(video_id, task_id)
+    
+    if result.get("success"):
+        from app.database import SessionLocal
+        from app.core.models import Video
+        db = SessionLocal()
+        try:
+            video = db.query(Video).filter(Video.id == video_id).first()
+            if video and video.session:
+                video.session.status = "completed"
+                db.commit()
+        finally:
+            db.close()
+            
+    return result
 
 @celery_app.task(bind=True, name='analyze_session_all_task')
 def analyze_session_all_task(self, session_id: int, *args, **kwargs):
@@ -123,6 +138,10 @@ def analyze_session_all_task(self, session_id: int, *args, **kwargs):
             res = integration_service.process_video(video.id, task_id)
             results.append(res)
             
+        # Update session status to completed
+        session.status = "completed"
+        db.commit()
+        
         integration_service.update_progress(task_id, 100, "All videos processed", None, status="complete")
         
         return {

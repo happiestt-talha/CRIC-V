@@ -1,3 +1,4 @@
+#app/services/integration_service.py
 """
 Integration service that connects all components
 """
@@ -19,7 +20,7 @@ from app.core.models import Session, Analysis, SessionStatus
 from .pose_service import PoseDetector
 from .bowling_analyzer import BowlingAnalyzer
 from .batting_analyzer import BattingAnalyzer
-from .video_processor import extract_video_metadata
+from .video_processor import extract_video_metadata, generate_annotated_video
 
 class IntegrationService:
     """Orchestrates the complete video analysis pipeline"""
@@ -78,10 +79,10 @@ class IntegrationService:
             # Step 3: Run specific analysis
             logger.info(f"   Step 3: Running {session.session_type} analysis...")
             if session.session_type == "bowling":
-                analysis_result = self.bowling_analyzer.analyze_video(video_path)
+                analysis_result = self.bowling_analyzer.analyze_video(video_path, session_id=session_id)
                 analysis_type = "bowling"
             elif session.session_type == "batting":
-                analysis_result = self.batting_analyzer.analyze_video(video_path)
+                analysis_result = self.batting_analyzer.analyze_video(video_path, session_id=session_id)
                 analysis_type = "batting"
             else:
                 raise ValueError(f"Unknown session type: {session.session_type}")
@@ -90,8 +91,9 @@ class IntegrationService:
             logger.info("   Step 4: Saving analysis to database...")
             
             # Extract metrics
-            bowling_metrics = analysis_result.get("bowling_metrics") or analysis_result.get("session_summary", {})
-            batting_metrics = analysis_result.get("batting_metrics") or analysis_result.get("session_summary", {})
+            session_summary = analysis_result.get("session_summary", {})
+            bowling_metrics = session_summary if analysis_type == "bowling" else {}
+            batting_metrics = session_summary if analysis_type == "batting" else {}
             
             # Create or update analysis
             analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
@@ -104,27 +106,40 @@ class IntegrationService:
             analysis.created_at = datetime.utcnow()
             
             # Set bowling metrics
-            if bowling_metrics:
-                analysis.bowling_arm = bowling_metrics.get("bowling_arm")
-                analysis.bowling_style = bowling_metrics.get("bowling_style")
-                analysis.elbow_extension = bowling_metrics.get("elbow_extension") or bowling_metrics.get("avg_elbow_extension")
+            if bowling_metrics and analysis_type == "bowling":
+                analysis.elbow_extension = bowling_metrics.get("avg_elbow_extension") or bowling_metrics.get("elbow_extension")
+                analysis.release_speed = bowling_metrics.get("avg_speed_kph") or bowling_metrics.get("release_speed")
                 analysis.release_height = bowling_metrics.get("release_height")
-                analysis.release_speed = bowling_metrics.get("release_speed")
-                analysis.swing_type = bowling_metrics.get("swing_type")
                 analysis.accuracy_score = bowling_metrics.get("accuracy_score")
-                analysis.front_foot_landing = bowling_metrics.get("front_foot_landing")
-                analysis.icc_compliant = bowling_metrics.get("icc_compliant", True)
-                analysis.violations = bowling_metrics.get("violations", [])
+                analysis.arm_type = bowling_metrics.get("arm_type")
+                analysis.bowling_style = bowling_metrics.get("bowling_style")
+                analysis.swing_type = bowling_metrics.get("swing_type") or bowling_metrics.get("most_common_line")
+                analysis.icc_compliant = bowling_metrics.get("icc_compliant_percentage", 100) >= 90
+                analysis.violations = []
                 analysis.recommendations = bowling_metrics.get("recommendations", [])
             
             # Set batting metrics
-            if batting_metrics:
+            shots = analysis_result.get("shots", [])
+            avg_bat_angle = (
+                sum(s["bat_angle"] for s in shots if s.get("bat_angle") is not None) / len(shots)
+                if shots else None
+            )
+            avg_head_stillness = (
+                sum(s.get("quality_score", 0) for s in shots) / len(shots)
+                if shots else None
+            )
+            avg_weight_dist = shots[0].get("weight_distribution") if shots else None
+
+            if batting_metrics and analysis_type == "batting":
                 analysis.stance_type = batting_metrics.get("stance_type")
-                analysis.weight_distribution = batting_metrics.get("weight_distribution")
-                analysis.bat_angle = batting_metrics.get("bat_angle")
-                analysis.head_stillness = batting_metrics.get("head_stillness")
-                analysis.shot_selection = batting_metrics.get("shot_selection")
-                analysis.recommendations = batting_metrics.get("recommendations", [])
+                analysis.bat_angle = avg_bat_angle
+                analysis.head_stillness = avg_head_stillness
+                analysis.shot_selection = shots[0].get("shot_type") if shots else None
+                analysis.weight_distribution = avg_weight_dist
+                analysis.recommendations = (
+                    shots[0].get("recommendations", []) if shots
+                    else batting_metrics.get("recommendations", [])
+                )
             
             # Store pose data summary (not full data to avoid large DB entries)
             analysis.pose_data = {
@@ -136,9 +151,26 @@ class IntegrationService:
             # Generate summary
             analysis.summary = self.generate_summary(analysis_result)
             
-            # Update session status
+            # Step 5: Generate annotated video
+            logger.info("   Step 5: Generating annotated video...")
+            output_dir = os.path.join("data", "processed")
+            os.makedirs(output_dir, exist_ok=True)
+            output_video_path = os.path.join(output_dir, f"annotated_{session_id}.mp4")
+            
+            # Merge pose data for annotation
+            analysis_result["pose_data"] = pose_report
+            
+            generate_annotated_video(
+                input_video_path=video_path,
+                output_video_path=output_video_path,
+                analysis_results=analysis_result,
+                session_type=session.session_type
+            )
+            
+            # Update session status and video path
             session.status = SessionStatus.COMPLETED.value
             session.processed_at = datetime.utcnow()
+            session.annotated_video_path = output_video_path
             
             db.commit()
             
@@ -217,10 +249,10 @@ class IntegrationService:
             self.update_progress(task_id, 50, "Detecting ball & Computing metrics", video_id)
             logger.info(f"   Step 3: Running {session.session_type} analysis...")
             if session.session_type == "bowling":
-                analysis_result = self.bowling_analyzer.analyze_video(video_path)
+                analysis_result = self.bowling_analyzer.analyze_video(video_path, session_id=session.id)
                 analysis_type = "bowling"
             elif session.session_type == "batting":
-                analysis_result = self.batting_analyzer.analyze_video(video_path)
+                analysis_result = self.batting_analyzer.analyze_video(video_path, session_id=session.id)
                 analysis_type = "batting"
             else:
                 raise ValueError(f"Unknown session type: {session.session_type}")
@@ -230,8 +262,9 @@ class IntegrationService:
             logger.info("   Step 4: Saving analysis to database...")
             
             # Extract metrics
-            bowling_metrics = analysis_result.get("bowling_metrics", {})
-            batting_metrics = analysis_result.get("batting_metrics", {})
+            session_summary = analysis_result.get("session_summary", {})
+            bowling_metrics = session_summary if analysis_type == "bowling" else {}
+            batting_metrics = session_summary if analysis_type == "batting" else {}
             
             # Create or update analysis for this specific video
             analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
@@ -243,16 +276,39 @@ class IntegrationService:
             analysis.analysis_type = analysis_type
             analysis.created_at = datetime.utcnow()
             
-            if bowling_metrics:
-                # Map fields... (shortened for brevity but should include all from process_session)
-                analysis.elbow_extension = bowling_metrics.get("elbow_extension")
-                analysis.icc_compliant = bowling_metrics.get("icc_compliant", True)
+            if bowling_metrics and analysis_type == "bowling":
+                analysis.elbow_extension = bowling_metrics.get("avg_elbow_extension") or bowling_metrics.get("elbow_extension")
+                analysis.release_speed = bowling_metrics.get("avg_speed_kph") or bowling_metrics.get("release_speed")
+                analysis.release_height = bowling_metrics.get("release_height")
+                analysis.accuracy_score = bowling_metrics.get("accuracy_score")
+                analysis.arm_type = bowling_metrics.get("arm_type")
+                analysis.bowling_style = bowling_metrics.get("bowling_style")
+                analysis.swing_type = bowling_metrics.get("swing_type") or bowling_metrics.get("most_common_line")
+                analysis.icc_compliant = bowling_metrics.get("icc_compliant_percentage", 100) >= 90
+                analysis.violations = []
                 analysis.recommendations = bowling_metrics.get("recommendations", [])
-                # Add others as needed
             
-            if batting_metrics:
+            shots = analysis_result.get("shots", [])
+            avg_bat_angle = (
+                sum(s["bat_angle"] for s in shots if s.get("bat_angle") is not None) / len(shots)
+                if shots else None
+            )
+            avg_head_stillness = (
+                sum(s.get("quality_score", 0) for s in shots) / len(shots)
+                if shots else None
+            )
+            avg_weight_dist = shots[0].get("weight_distribution") if shots else None
+
+            if batting_metrics and analysis_type == "batting":
                 analysis.stance_type = batting_metrics.get("stance_type")
-                analysis.recommendations = batting_metrics.get("recommendations", [])
+                analysis.bat_angle = avg_bat_angle
+                analysis.head_stillness = avg_head_stillness
+                analysis.shot_selection = shots[0].get("shot_type") if shots else None
+                analysis.weight_distribution = avg_weight_dist
+                analysis.recommendations = (
+                    shots[0].get("recommendations", []) if shots
+                    else batting_metrics.get("recommendations", [])
+                )
             
             analysis.pose_data = {
                 "total_frames": len(pose_report.get("frames", [])),
@@ -260,8 +316,26 @@ class IntegrationService:
                 "average_metrics": pose_report.get("summary", {}).get("average_metrics", {})
             }
             
-            # Update video status
+            # Step 5: Generate annotated video
+            self.update_progress(task_id, 90, "Generating annotated video", video_id)
+            logger.info(f"   Step 5: Generating annotated video for video {video_id}...")
+            output_dir = os.path.join("data", "processed")
+            os.makedirs(output_dir, exist_ok=True)
+            output_video_path = os.path.join(output_dir, f"annotated_session_{session.id}_video_{video.id}.mp4")
+            
+            # Merge pose data for annotation
+            analysis_result["pose_data"] = pose_report
+            
+            generate_annotated_video(
+                input_video_path=video_path,
+                output_video_path=output_video_path,
+                analysis_results=analysis_result,
+                session_type=session.session_type
+            )
+            
+            # Update status and paths
             video.status = "done"
+            session.annotated_video_path = output_video_path
             
             db.commit()
             
@@ -296,8 +370,13 @@ class IntegrationService:
     def generate_summary(self, analysis_result: Dict) -> str:
         """Generate a human-readable summary of the analysis"""
         
-        bowling_metrics = analysis_result.get("bowling_metrics", {})
-        batting_metrics = analysis_result.get("batting_metrics", {})
+        session_summary = analysis_result.get("session_summary", {})
+        # Check for deliveries to identify bowling, shots for batting
+        is_bowling = "deliveries" in analysis_result
+        is_batting = "shots" in analysis_result
+        
+        bowling_metrics = session_summary if is_bowling else {}
+        batting_metrics = session_summary if is_batting else {}
         
         if bowling_metrics:
             return f"""Bowling Analysis Summary:

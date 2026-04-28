@@ -15,7 +15,7 @@ class BowlingInsights:
         ).all()
 
         if not deliveries:
-            return {"player_id": player_id, "error": "No delivery data found"}
+            return self._get_empty_insights(player_id)
 
         # 1. Speed Consistency
         speeds = [d.speed_kmh for d in deliveries if d.speed_kmh]
@@ -103,4 +103,21 @@ class BowlingInsights:
             "most_common_line": most_common_line,
             "most_common_length": most_common_length,
             "accuracy_score": 75.0
+        }
+    def _get_empty_insights(self, player_id):
+        return {
+            "player_id": player_id,
+            "speed_consistency": {
+                "avg_speed": 0, "std_dev": 0, "consistency_score": 0,
+                "total_deliveries": 0, "max_speed": 0, "min_speed": 0,
+                "speed_trend": "stable"
+            },
+            "line_length_heatmap": {
+                "heatmap": {}, "most_common_line": "N/A", "most_common_length": "N/A", "accuracy_score": 0
+            },
+            "icc_compliance": {
+                "compliant_percentage": 0, "total_violations": 0, "avg_elbow_angle": 0, "violation_trend": "stable"
+            },
+            "session_comparison": [],
+            "recommendations": ["No delivery data found. Record some sessions to see insights."]
         }

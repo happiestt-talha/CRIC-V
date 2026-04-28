@@ -233,9 +233,6 @@ async def get_batting_insights(
     
     # Gather data
     insights_data = insights_service.get_batting_insights(player_id, db)
-    
-    if "error" in insights_data:
-        raise HTTPException(status_code=404, detail=insights_data["error"])
         
     return insights_data
 
@@ -271,9 +268,6 @@ async def get_bowling_insights(
     # Gather data
     insights_data = insights_service.get_bowling_insights(player_id, db)
     
-    if "error" in insights_data:
-        raise HTTPException(status_code=404, detail=insights_data["error"])
-
     # Build response (matches schema BowlingInsightsResponse)
     return insights_data
 

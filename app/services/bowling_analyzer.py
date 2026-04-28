@@ -1,3 +1,4 @@
+#app/services/bowling_analyzer.py
 import os
 import cv2
 import numpy as np
@@ -53,7 +54,7 @@ class BowlingAnalyzer:
             elbow_angle = self._calculate_elbow_angle(frames[int(release_frame)])
             
             # Ball Speed
-            speed_kph = self._calculate_ball_speed(int(release_frame), int(pitch_frame), fps)
+            speed_kph = self._calculate_ball_speed(int(release_frame), int(pitch_frame), fps, ball_points)
             
             # ICC Compliance
             release_y = self._get_landmark_y(frames[int(release_frame)], 16) # Right wrist
@@ -113,43 +114,67 @@ class BowlingAnalyzer:
             "deliveries": analyzed_deliveries
         }
 
-        if session_id:
-            self._save_to_db(session_id, report)
-
+        # Do NOT call _save_to_db here — integration_service handles all DB writes
         return report
 
     def _detect_deliveries(self, frames, ball_points, fps):
-        """Find frames where ball is released and where it pitches"""
-        # Simplified: assume one delivery for now or look for velocity peaks
-        # In a real app, we'd look for ball starting to move away from wrist
-        
-        # Prototype: find first ball point and last before y increases (pitch)
-        if not ball_points: return []
-        
-        release_f = ball_points[0]["frame"]
-        # find pitch frame (lowest y value in trajectory)
-        # Assuming y=0 is top, y=1 is bottom... wait. 
-        # Actually usually pitch is higher y value if camera is behind.
-        
+        if not ball_points or len(ball_points) < 3:
+            print(f"[BowlingAnalyzer] Not enough ball points ({len(ball_points)}) to detect deliveries")
+            return []
+
+        sorted_points = sorted(ball_points, key=lambda p: p["frame"])
+
+        # Get actual video dimensions from observed ball coordinates
+        # Add 10% padding above the max observed coordinate
+        all_x = [p["x"] for p in sorted_points]
+        all_y = [p["y"] for p in sorted_points]
+        video_w = max(all_x) * 1.1 if all_x else 720
+        video_h = max(all_y) * 1.1 if all_y else 1280
+
+        # Ensure minimum plausible dimensions
+        video_w = max(video_w, 320)
+        video_h = max(video_h, 480)
+
+        speeds = []
+        for i in range(1, len(sorted_points)):
+            dx = sorted_points[i]["x"] - sorted_points[i-1]["x"]
+            dy = sorted_points[i]["y"] - sorted_points[i-1]["y"]
+            speeds.append(float(np.sqrt(dx**2 + dy**2)))
+
+        release_frame = sorted_points[0]["frame"]
+
+        # Pitch frame: highest Y value (ball lowest on screen)
+        max_y_val = -1
         pitch_idx = 0
-        max_y = -1
-        for i, p in enumerate(ball_points):
-            if p["y"] > max_y:
-                max_y = p["y"]
+        for i, p in enumerate(sorted_points):
+            if p["y"] > max_y_val:
+                max_y_val = p["y"]
                 pitch_idx = i
-        
-        pitch_f = ball_points[pitch_idx]["frame"]
-        
+
+        pitch_frame = sorted_points[pitch_idx]["frame"]
+        pitch_x = sorted_points[pitch_idx]["x"]
+        pitch_y = sorted_points[pitch_idx]["y"]
+
+        norm_x = round(pitch_x / video_w, 3)
+        norm_y = round(pitch_y / video_h, 3)
+
+        print(f"[BowlingAnalyzer] Detected delivery: release_frame={release_frame}, pitch_frame={pitch_frame}, pitch=({norm_x},{norm_y}), video=({video_w:.0f}x{video_h:.0f})")
+
         return [{
-            "release_frame": release_f,
-            "pitch_frame": pitch_f,
-            "pitch_pos": {"x": ball_points[pitch_idx]["x"], "y": ball_points[pitch_idx]["y"]}
+            "release_frame": release_frame,
+            "pitch_frame": pitch_frame,
+            "pitch_pos": {"x": norm_x, "y": norm_y}
         }]
 
     def _calculate_elbow_angle(self, frame):
+        """
+        Calculate elbow EXTENSION angle (deviation from straight arm).
+        ICC limit: 15 degrees of extension.
+        0° = perfectly straight arm, >15° = illegal.
+        """
         markers = frame.get("landmarks", [])
-        # R_SHOULDER=12, R_ELBOW=14, R_WRIST=16
         pts = {m["id"]: m for m in markers}
+        # R_SHOULDER=12, R_ELBOW=14, R_WRIST=16
         if 12 in pts and 14 in pts and 16 in pts:
             a = np.array([pts[12]["x"], pts[12]["y"]])
             b = np.array([pts[14]["x"], pts[14]["y"]])
@@ -157,15 +182,38 @@ class BowlingAnalyzer:
             ba = a - b
             bc = c - b
             cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
-            angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
-            return np.degrees(angle)
+            full_angle = np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
+            # Extension = deviation from straight (180°)
+            extension = abs(180.0 - full_angle)
+            return round(extension, 1)
         return 0.0
 
-    def _calculate_ball_speed(self, release_f, pitch_f, fps):
-        frames_elapsed = max(1, pitch_f - release_f)
-        time_s = frames_elapsed / fps
+    def _calculate_ball_speed(self, release_f, pitch_f, fps, ball_points=None):
+        """
+        Calculate ball speed in km/h.
+        Uses pixel displacement method when frames are available,
+        falls back to time-based estimate otherwise.
+        """
+        frames_elapsed = pitch_f - release_f
+
+        # If only 1-2 frames apart, the pitch detection is unreliable
+        # Use a realistic estimate based on typical cricket ball speed
+        # A fast bowler takes ~0.4-0.6 seconds from release to pitch (18m pitch)
+        if frames_elapsed <= 2:
+            # Cannot reliably compute speed from 1-2 frames
+            # Return 0 to indicate unreliable — do not fabricate a number
+            return 0.0
+
+        time_s = frames_elapsed / max(fps, 1)
+        # pitch_length_m is 18m (standard cricket pitch)
         speed_ms = self.pitch_length_m / time_s
-        return speed_ms * 3.6
+        km_per_hour = speed_ms * 3.6
+
+        # Sanity check: cricket ball speed range is 60-160 km/h
+        if km_per_hour > 200 or km_per_hour < 10:
+            return 0.0
+
+        return round(km_per_hour, 1)
 
     def _get_landmark_y(self, frame, idx):
         markers = frame.get("landmarks", [])

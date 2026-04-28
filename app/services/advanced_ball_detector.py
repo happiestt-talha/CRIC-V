@@ -1,6 +1,9 @@
 """
 AdvancedBallDetector - extends BallDetector with speed and spin estimation.
 """
+
+# app/services/advanced_ball_detector.py
+
 import numpy as np
 from app.services.ball_detector import BallDetector
 from typing import List, Dict
@@ -14,11 +17,13 @@ class AdvancedBallDetector(BallDetector):
 
     def __init__(self, model_path: str = None, fps: float = 30.0, pixels_per_meter: float = 100.0):
         """
-        :param model_path: Path to the YOLO model file (optional).
-        :param fps: Frames per second of the input video (used for speed calc).
-        :param pixels_per_meter: Calibration factor – pixels that correspond to 1 metre.
+        :param model_path: Path to YOLO model. Defaults to cricket_ball_detector.pt
+        :param fps: Frames per second of input video.
+        :param pixels_per_meter: Calibration factor.
         """
-        super().__init__(model_path=model_path)
+        # Explicitly pass the custom model path so parent doesn't fall back to yolov8n.pt
+        resolved = model_path or "models/cricket_ball_detector.pt"
+        super().__init__(model_path=resolved)
         self.fps = fps
         self.pixels_per_meter = pixels_per_meter
 
