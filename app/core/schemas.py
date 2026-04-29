@@ -128,6 +128,8 @@ class VideoBase(BaseModel):
     file_size_mb: Optional[float] = None
     status: str
     created_at: datetime
+    source_url: Optional[str] = None
+    source_type: Optional[str] = None
 
 class Video(VideoBase):
     id: int

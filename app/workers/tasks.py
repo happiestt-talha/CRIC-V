@@ -213,3 +213,74 @@ def cleanup_old_sessions(days_old: int = 30):
         
     finally:
         db.close()
+
+@celery_app.task(bind=True, name='download_and_import_video_task')
+def download_and_import_video_task(self, session_id: int, url: str):
+    """
+    Celery task: download video from URL and add to session.
+    Tracks progress in Redis for SSE streaming.
+    """
+    from app.services.url_video_service import download_video
+    from app.database import SessionLocal
+    from app.core.models import Session as DBSession, Video
+    from app.services.integration_service import integration_service
+    import os
+
+    task_id = self.request.id
+    db = SessionLocal()
+
+    def update_progress(percent, stage, **kwargs):
+        integration_service.update_progress(task_id, percent, stage, None, **kwargs)
+
+    try:
+        session = db.query(DBSession).filter(DBSession.id == session_id).first()
+        if not session:
+            integration_service.update_progress(task_id, 0, "Session not found", None, status="failed")
+            return {"success": False, "error": "Session not found"}
+
+        # Step 1: Download
+        update_progress(5, "Starting download...")
+        output_dir = os.path.join("data", "raw_videos", f"session_{session_id}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        result = download_video(
+            url=url,
+            output_dir=output_dir,
+            filename_prefix=f"session_{session_id}",
+            progress_callback=update_progress
+        )
+
+        if not result["success"]:
+            integration_service.update_progress(task_id, 0, result["error"], None, status="failed")
+            return {"success": False, "error": result["error"]}
+
+        # Step 2: Create Video record in DB
+        update_progress(95, "Saving to database...")
+        video = Video(
+            session_id=session_id,
+            file_path=result["file_path"],
+            original_filename=result["filename"],
+            file_size_mb=result["file_size_mb"],
+            status="uploaded",
+            source_url=url,  # Store the original URL
+            source_type="youtube" if "youtube" in url or "youtu.be" in url else "direct_url"
+        )
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+
+        update_progress(100, "Import complete — video ready for analysis", status="complete")
+
+        return {
+            "success": True,
+            "video_id": video.id,
+            "session_id": session_id,
+            "filename": result["filename"],
+            "file_size_mb": result["file_size_mb"]
+        }
+
+    except Exception as e:
+        integration_service.update_progress(task_id, 0, f"Import failed: {str(e)}", None, status="failed")
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()

@@ -302,6 +302,8 @@ class Video(Base):
     file_size_mb = Column(Float, nullable=True)
     status = Column(String(30), nullable=False, default="uploaded")  # uploaded, analyzing, done, failed
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    source_url = Column(String, nullable=True)      # Original URL if imported
+    source_type = Column(String, nullable=True)     # 'upload', 'youtube', 'direct_url'
 
     # Relationships
     session = relationship("Session", back_populates="videos")

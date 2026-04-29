@@ -49,7 +49,7 @@ async def create_player_with_credentials(
     player_data: schemas.PlayerCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Create a new player with auto-generated credentials (coach/admin only)
@@ -129,7 +129,7 @@ async def create_player(
     player_data: schemas.PlayerCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Backward compatibility for the old endpoint, or just redirect to the new one.

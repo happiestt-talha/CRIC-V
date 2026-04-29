@@ -150,7 +150,7 @@ async def register(
 @router.put("/change-password")
 async def change_password(
     request: schemas.ChangePasswordRequest,
-    current_user: User = Depends(security.get_current_user),
+    current_user: User = Depends(security.get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """

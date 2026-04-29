@@ -7,19 +7,25 @@ from typing import List
 import os
 
 from app.core import security, schemas
+from app.core.security import get_current_active_user
 from app.database import get_db
 from app.core.models import User, Session as DBSession, Player, Video, Analysis
 from app.services.video_processor import process_video_background
+from app.services.url_video_service import validate_url, is_youtube_url
+from pydantic import BaseModel
 
 router = APIRouter()
+
+class VideoUrlRequest(BaseModel):
+    url: str
 
 @router.post("/", response_model=schemas.Session)
 async def create_session(
     session: schemas.SessionCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
-):
+    current_user: User = Depends(get_current_active_user)
+) -> schemas.Session:
     """
     Create a new training session
     """
@@ -50,7 +56,7 @@ async def read_sessions(
     limit: int = 100,
     player_id: int = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Retrieve sessions with optional filtering
@@ -75,7 +81,7 @@ async def read_sessions(
 async def read_session(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get a specific session by ID
@@ -98,7 +104,7 @@ async def upload_session_video(
     video_file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Upload video for an existing session
@@ -154,7 +160,7 @@ async def upload_session_video(
 async def get_session_videos(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get all videos for a session
@@ -176,7 +182,7 @@ async def delete_session_video(
     session_id: int,
     video_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Delete a specific video from a session
@@ -267,7 +273,7 @@ async def stream_original_video(
 async def get_session_delete_preview(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get a summary of what will be deleted for a session
@@ -304,7 +310,7 @@ async def get_session_delete_preview(
 async def delete_session(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Delete a session and all its associated data (files, records, tasks)
@@ -439,3 +445,58 @@ async def delete_session(
         db.rollback()
         print(f"Error deleting session: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete session. Please try again.")
+
+@router.post("/{session_id}/validate-url")
+async def validate_video_url(
+    session_id: int,
+    request: VideoUrlRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Validate a video URL before importing.
+    Returns video metadata (title, duration) or error message.
+    Fast endpoint — does not download, only checks availability.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = validate_url(request.url)
+    return result
+
+
+@router.post("/{session_id}/import-url")
+async def import_video_from_url(
+    session_id: int,
+    request: VideoUrlRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Import a video from URL (YouTube or direct).
+    Downloads in background via Celery task.
+    Returns task_id for progress tracking via SSE.
+    """
+    from app.workers.tasks import download_and_import_video_task
+
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Quick validation before queuing
+    validation = validate_url(request.url)
+    if not validation["valid"]:
+        raise HTTPException(status_code=400, detail=validation["error"])
+
+    # Queue the download task
+    task = download_and_import_video_task.delay(session_id, request.url)
+
+    return {
+        "task_id": task.id,
+        "session_id": session_id,
+        "url": request.url,
+        "video_title": validation.get("title"),
+        "message": "Download started. Track progress using the task_id."
+    }

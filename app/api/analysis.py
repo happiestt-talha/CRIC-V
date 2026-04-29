@@ -26,7 +26,7 @@ router = APIRouter()
 async def get_session_analysis(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Get analysis results for a specific session
@@ -73,7 +73,7 @@ async def get_player_bowling_analysis(
     player_id: int,
     limit: int = 10,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Get bowling analysis history for a player
@@ -99,7 +99,7 @@ async def get_player_batting_analysis(
     player_id: int,
     limit: int = 10,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Get batting analysis history for a player
@@ -126,7 +126,7 @@ async def trigger_manual_analysis(
     analysis_type: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Manually trigger analysis for a session
@@ -156,7 +156,7 @@ async def trigger_manual_analysis(
 async def trigger_video_analysis(
     video_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Trigger analysis for a specific video
@@ -176,7 +176,7 @@ async def trigger_video_analysis(
 async def trigger_session_all_analysis(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Trigger analysis for all videos in a session
@@ -225,7 +225,7 @@ async def stream_progress(task_id: str):
 async def get_batting_insights(
     player_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """Get advanced batting insights for a player"""
     # Initialize insights service
@@ -279,7 +279,7 @@ async def create_feedback(
     session_id: int,
     feedback: schemas.FeedbackCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(security.get_current_user)
+    current_user: models.User = Depends(security.get_current_active_user)
 ):
     """
     Create feedback for a session (Coaches/Admins only)
@@ -318,7 +318,7 @@ async def create_feedback(
 async def get_session_feedback(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(security.get_current_user)
+    current_user: models.User = Depends(security.get_current_active_user)
 ):
     """
     Get all feedback for a session
@@ -353,7 +353,7 @@ async def update_feedback(
     feedback_id: int,
     feedback_update: schemas.FeedbackUpdate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(security.get_current_user)
+    current_user: models.User = Depends(security.get_current_active_user)
 ):
     """
     Update existing feedback (Only the coach who created it can update)
@@ -385,7 +385,7 @@ async def update_feedback(
 def get_session_deliveries(
     session_id: int, 
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Returns all bowling delivery records for a session
@@ -419,7 +419,7 @@ async def get_delivery_clip(
     session_id: int,
     delivery_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Returns a short video clip (±2 seconds around release_frame)

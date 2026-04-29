@@ -27,7 +27,7 @@ def get_dir_size(path: str) -> float:
 @router.get("/stats")
 async def get_admin_stats(
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """Get system-wide statistics (Admin only)"""
     if current_user.role != "admin":
@@ -58,7 +58,7 @@ async def get_admin_stats(
 @router.get("/users")
 async def get_admin_users(
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """Get all users with their player and session counts"""
     if current_user.role != "admin":
@@ -85,7 +85,7 @@ async def get_admin_users(
 async def delete_session(
     session_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """Delete a session and all its associated files and data (Admin only)"""
     if current_user.role != "admin":
@@ -176,7 +176,7 @@ async def get_admin_sessions(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """Retrieve all sessions with advanced filtering"""
     if current_user.role != "admin":

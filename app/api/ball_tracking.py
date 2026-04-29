@@ -27,7 +27,7 @@ async def analyze_ball_tracking(
     session_id: Optional[int] = None,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(security.get_current_active_user)
 ):
     """
     Upload a video for ball tracking analysis (speed, trajectory, spin, etc.)
