@@ -1,0 +1,414 @@
+#app/services/integration_service.py
+"""
+Integration service that connects all components
+"""
+import os
+import json
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+from typing import Dict, Any, Optional
+from datetime import datetime
+import cv2
+import numpy as np
+import redis
+import json
+
+from app.database import SessionLocal
+from app.core.models import Session, Analysis, SessionStatus
+from .pose_service import PoseDetector
+from .bowling_analyzer import BowlingAnalyzer
+from .batting_analyzer import BattingAnalyzer
+from .video_processor import extract_video_metadata, generate_annotated_video
+
+def _safe_float(val):
+    if val is None:
+        return None
+    return float(val)
+
+def _safe_int(val):
+    if val is None:
+        return None
+    return int(val)
+
+class IntegrationService:
+    """Orchestrates the complete video analysis pipeline"""
+    
+    def __init__(self):
+        self.pose_detector = PoseDetector()
+        self.bowling_analyzer = BowlingAnalyzer()
+        self.batting_analyzer = BattingAnalyzer()
+        self.redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+
+    def update_progress(self, task_id: str, percent: int, stage: str, video_id: int, status: str = "processing"):
+        if not task_id:
+            return
+        progress = {
+            "percent": percent,
+            "stage": stage,
+            "video_id": video_id,
+            "status": status
+        }
+        self.redis_client.set(f"task_progress:{task_id}", json.dumps(progress), ex=3600)
+        
+    def process_session(self, session_id: int) -> Dict[str, Any]:
+        """
+        Complete pipeline for processing a session
+        """
+        db = SessionLocal()
+        try:
+            # Get session from database
+            session = db.query(Session).filter(Session.id == session_id).first()
+            if not session:
+                return {"error": f"Session {session_id} not found"}
+            
+            # Update status
+            session.status = SessionStatus.PROCESSING.value
+            db.commit()
+            
+            logger.info(f"🚀 Starting analysis for session {session_id}: {session.session_type}")
+            
+            # Step 1: Extract video metadata
+            logger.info("   Step 1: Extracting video metadata...")
+            video_path = session.video_path
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+            
+            metadata = extract_video_metadata(video_path)
+            session.duration = metadata.get("duration")
+            session.frame_count = metadata.get("frame_count")
+            
+            # Step 2: Pose detection
+            logger.info("   Step 2: Running pose detection...")
+            pose_report = self.pose_detector.process_video(video_path)
+            
+            if not pose_report or "frames" not in pose_report:
+                raise Exception("No pose data extracted from video")
+            
+            # Step 3: Run specific analysis
+            logger.info(f"   Step 3: Running {session.session_type} analysis...")
+            if session.session_type == "bowling":
+                analysis_result = self.bowling_analyzer.analyze_video(video_path, session_id=session_id)
+                analysis_type = "bowling"
+            elif session.session_type == "batting":
+                analysis_result = self.batting_analyzer.analyze_video(video_path, session_id=session_id)
+                analysis_type = "batting"
+            else:
+                raise ValueError(f"Unknown session type: {session.session_type}")
+            
+            # Step 4: Create analysis record
+            logger.info("   Step 4: Saving analysis to database...")
+            
+            # Extract metrics
+            session_summary = analysis_result.get("session_summary", {})
+            bowling_metrics = session_summary if analysis_type == "bowling" else {}
+            batting_metrics = session_summary if analysis_type == "batting" else {}
+            
+            # Create or update analysis
+            analysis = db.query(Analysis).filter(Analysis.session_id == session_id).first()
+            if not analysis:
+                analysis = Analysis(session_id=_safe_int(session_id))
+                db.add(analysis)
+            
+            # Update analysis fields
+            analysis.analysis_type = analysis_type
+            analysis.created_at = datetime.utcnow()
+            
+            # Set bowling metrics
+            if bowling_metrics and analysis_type == "bowling":
+                analysis.elbow_extension = _safe_float(bowling_metrics.get("avg_elbow_extension") or bowling_metrics.get("elbow_extension"))
+                analysis.release_speed = _safe_float(bowling_metrics.get("avg_speed_kph") or bowling_metrics.get("release_speed"))
+                analysis.release_height = _safe_float(bowling_metrics.get("release_height"))
+                analysis.accuracy_score = _safe_float(bowling_metrics.get("accuracy_score"))
+                analysis.arm_type = bowling_metrics.get("arm_type")
+                analysis.bowling_style = bowling_metrics.get("bowling_style")
+                analysis.swing_type = bowling_metrics.get("swing_type") or bowling_metrics.get("most_common_line")
+                analysis.icc_compliant = bowling_metrics.get("icc_compliant_percentage", 100) >= 90
+                analysis.violations = []
+                analysis.recommendations = bowling_metrics.get("recommendations", [])
+            
+            # Set batting metrics
+            shots = analysis_result.get("shots", [])
+            avg_bat_angle = (
+                sum(s["bat_angle"] for s in shots if s.get("bat_angle") is not None) / len(shots)
+                if shots else None
+            )
+            avg_head_stillness = (
+                sum(s.get("quality_score", 0) for s in shots) / len(shots)
+                if shots else None
+            )
+            avg_weight_dist = shots[0].get("weight_distribution") if shots else None
+
+            if batting_metrics and analysis_type == "batting":
+                analysis.stance_type = batting_metrics.get("stance_type")
+                analysis.bat_angle = _safe_float(avg_bat_angle)
+                analysis.head_stillness = _safe_float(avg_head_stillness)
+                analysis.shot_selection = shots[0].get("shot_type") if shots else None
+                analysis.weight_distribution = avg_weight_dist
+                analysis.recommendations = (
+                    shots[0].get("recommendations", []) if shots
+                    else batting_metrics.get("recommendations", [])
+                )
+            
+            # Store pose data summary (not full data to avoid large DB entries)
+            analysis.pose_data = {
+                "total_frames": len(pose_report.get("frames", [])),
+                "key_events": pose_report.get("summary", {}).get("key_events", []),
+                "average_metrics": pose_report.get("summary", {}).get("average_metrics", {})
+            }
+            
+            # Generate summary
+            analysis.summary = self.generate_summary(analysis_result)
+            
+            # Step 5: Generate annotated video
+            logger.info("   Step 5: Generating annotated video...")
+            output_dir = os.path.join("data", "processed")
+            os.makedirs(output_dir, exist_ok=True)
+            output_video_path = os.path.join(output_dir, f"annotated_{session_id}.mp4")
+            
+            # Merge pose data for annotation
+            analysis_result["pose_data"] = pose_report
+            
+            generate_annotated_video(
+                input_video_path=video_path,
+                output_video_path=output_video_path,
+                analysis_results=analysis_result,
+                session_type=session.session_type
+            )
+            
+            # Update session status and video path
+            session.status = SessionStatus.COMPLETED.value
+            session.processed_at = datetime.utcnow()
+            session.annotated_video_path = output_video_path
+            
+            db.commit()
+            
+            logger.info(f"✅ Analysis completed for session {session_id}")
+            
+            return {
+                "success": True,
+                "session_id": session_id,
+                "analysis_id": analysis.id,
+                "status": "completed",
+                "analysis_type": analysis_type,
+                "summary": analysis.summary
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing session {session_id}: {e}")
+            
+            # Update session status to failed
+            if session:
+                session.status = SessionStatus.FAILED.value
+                db.commit()
+            
+            return {
+                "success": False,
+                "session_id": session_id,
+                "error": str(e),
+                "status": "failed"
+            }
+        
+        finally:
+            db.close()
+
+    def process_video(self, video_id: int, task_id: str = None) -> Dict[str, Any]:
+        """
+        Complete pipeline for processing a specific video
+        """
+        db = SessionLocal()
+        from app.core.models import Video
+        try:
+            # Get video from database
+            video = db.query(Video).filter(Video.id == video_id).first()
+            if not video:
+                return {"error": f"Video {video_id} not found"}
+            
+            session = video.session
+            if not session:
+                return {"error": f"Session for video {video_id} not found"}
+
+            # Update status
+            video.status = "analyzing"
+            db.commit()
+            
+            self.update_progress(task_id, 0, "Extracting frames", video_id)
+            
+            logger.info(f"🚀 Starting analysis for video {video_id} (Session {session.id}): {session.session_type}")
+            
+            # Step 1: Extract video metadata
+            self.update_progress(task_id, 10, "Extracting video metadata", video_id)
+            video_path = video.file_path
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+            
+            metadata = extract_video_metadata(video_path)
+            # You might want to store metadata in Video model too
+            
+            # Step 2: Pose detection
+            self.update_progress(task_id, 20, "Running pose estimation", video_id)
+            logger.info("   Step 2: Running pose detection...")
+            # Here you might want to use a more granular progress update if pose_detector supports it
+            pose_report = self.pose_detector.process_video(video_path)
+            
+            if not pose_report or "frames" not in pose_report:
+                raise Exception("No pose data extracted from video")
+            
+            # Step 3: Run specific analysis
+            self.update_progress(task_id, 50, "Detecting ball & Computing metrics", video_id)
+            logger.info(f"   Step 3: Running {session.session_type} analysis...")
+            if session.session_type == "bowling":
+                analysis_result = self.bowling_analyzer.analyze_video(video_path, session_id=session.id)
+                analysis_type = "bowling"
+            elif session.session_type == "batting":
+                analysis_result = self.batting_analyzer.analyze_video(video_path, session_id=session.id)
+                analysis_type = "batting"
+            else:
+                raise ValueError(f"Unknown session type: {session.session_type}")
+            
+            # Step 4: Create analysis record
+            self.update_progress(task_id, 80, "Saving results", video_id)
+            logger.info("   Step 4: Saving analysis to database...")
+            
+            # Extract metrics
+            session_summary = analysis_result.get("session_summary", {})
+            bowling_metrics = session_summary if analysis_type == "bowling" else {}
+            batting_metrics = session_summary if analysis_type == "batting" else {}
+            
+            # Create or update analysis for this specific video
+            analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
+            if not analysis:
+                analysis = Analysis(session_id=_safe_int(session.id), video_id=_safe_int(video_id))
+                db.add(analysis)
+            
+            # Update analysis fields (similar to process_session)
+            analysis.analysis_type = analysis_type
+            analysis.created_at = datetime.utcnow()
+            
+            if bowling_metrics and analysis_type == "bowling":
+                analysis.elbow_extension = _safe_float(bowling_metrics.get("avg_elbow_extension") or bowling_metrics.get("elbow_extension"))
+                analysis.release_speed = _safe_float(bowling_metrics.get("avg_speed_kph") or bowling_metrics.get("release_speed"))
+                analysis.release_height = _safe_float(bowling_metrics.get("release_height"))
+                analysis.accuracy_score = _safe_float(bowling_metrics.get("accuracy_score"))
+                analysis.arm_type = bowling_metrics.get("arm_type")
+                analysis.bowling_style = bowling_metrics.get("bowling_style")
+                analysis.swing_type = bowling_metrics.get("swing_type") or bowling_metrics.get("most_common_line")
+                analysis.icc_compliant = bowling_metrics.get("icc_compliant_percentage", 100) >= 90
+                analysis.violations = []
+                analysis.recommendations = bowling_metrics.get("recommendations", [])
+            
+            shots = analysis_result.get("shots", [])
+            avg_bat_angle = (
+                sum(s["bat_angle"] for s in shots if s.get("bat_angle") is not None) / len(shots)
+                if shots else None
+            )
+            avg_head_stillness = (
+                sum(s.get("quality_score", 0) for s in shots) / len(shots)
+                if shots else None
+            )
+            avg_weight_dist = shots[0].get("weight_distribution") if shots else None
+
+            if batting_metrics and analysis_type == "batting":
+                analysis.stance_type = batting_metrics.get("stance_type")
+                analysis.bat_angle = _safe_float(avg_bat_angle)
+                analysis.head_stillness = _safe_float(avg_head_stillness)
+                analysis.shot_selection = shots[0].get("shot_type") if shots else None
+                analysis.weight_distribution = avg_weight_dist
+                analysis.recommendations = (
+                    shots[0].get("recommendations", []) if shots
+                    else batting_metrics.get("recommendations", [])
+                )
+            
+            analysis.pose_data = {
+                "total_frames": len(pose_report.get("frames", [])),
+                "key_events": pose_report.get("summary", {}).get("key_events", []),
+                "average_metrics": pose_report.get("summary", {}).get("average_metrics", {})
+            }
+            
+            # Step 5: Generate annotated video
+            self.update_progress(task_id, 90, "Generating annotated video", video_id)
+            logger.info(f"   Step 5: Generating annotated video for video {video_id}...")
+            output_dir = os.path.join("data", "processed")
+            os.makedirs(output_dir, exist_ok=True)
+            output_video_path = os.path.join(output_dir, f"annotated_session_{session.id}_video_{video.id}.mp4")
+            
+            # Merge pose data for annotation
+            analysis_result["pose_data"] = pose_report
+            
+            generate_annotated_video(
+                input_video_path=video_path,
+                output_video_path=output_video_path,
+                analysis_results=analysis_result,
+                session_type=session.session_type
+            )
+            
+            # Update status and paths
+            video.status = "done"
+            session.annotated_video_path = output_video_path
+            
+            db.commit()
+            
+            self.update_progress(task_id, 100, "Complete", video_id, status="complete")
+            logger.info(f"✅ Analysis completed for video {video_id}")
+            
+            return {
+                "success": True,
+                "video_id": video_id,
+                "analysis_id": analysis.id,
+                "status": "complete"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing video {video_id}: {e}")
+            self.update_progress(task_id, 0, f"Error: {str(e)}", video_id, status="failed")
+            
+            if video:
+                video.status = "failed"
+                db.commit()
+            
+            return {
+                "success": False,
+                "video_id": video_id,
+                "error": str(e),
+                "status": "failed"
+            }
+        
+        finally:
+            db.close()
+    
+    def generate_summary(self, analysis_result: Dict) -> str:
+        """Generate a human-readable summary of the analysis"""
+        
+        session_summary = analysis_result.get("session_summary", {})
+        # Check for deliveries to identify bowling, shots for batting
+        is_bowling = "deliveries" in analysis_result
+        is_batting = "shots" in analysis_result
+        
+        bowling_metrics = session_summary if is_bowling else {}
+        batting_metrics = session_summary if is_batting else {}
+        
+        if bowling_metrics:
+            return f"""Bowling Analysis Summary:
+- Bowling Arm: {bowling_metrics.get('bowling_arm', 'N/A')}
+- Style: {bowling_metrics.get('bowling_style', 'N/A')}
+- Elbow Extension: {bowling_metrics.get('elbow_extension', 0):.1f}°
+- Estimated Speed: {bowling_metrics.get('release_speed', 0):.1f} km/h
+- Swing Type: {bowling_metrics.get('swing_type', 'N/A')}
+- Accuracy Score: {bowling_metrics.get('accuracy_score', 0):.1f}/100
+- ICC Compliant: {'✅ Yes' if bowling_metrics.get('icc_compliant', True) else '❌ No'}
+"""
+        
+        elif batting_metrics:
+            return f"""Batting Analysis Summary:
+- Stance: {batting_metrics.get('stance_type', 'N/A')}
+- Weight Distribution: Front {batting_metrics.get('weight_distribution', {}).get('front', 0)}% / Back {batting_metrics.get('weight_distribution', {}).get('back', 0)}%
+- Bat Angle: {batting_metrics.get('bat_angle', 0):.1f}°
+- Head Stillness: {batting_metrics.get('head_stillness', 0):.1f}/100
+- Shot Selection: {batting_metrics.get('shot_selection', 'N/A')}
+"""
+        
+        return "Analysis completed. View detailed report for metrics."
+
+# Singleton instance
+integration_service = IntegrationService()

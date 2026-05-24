@@ -1,0 +1,43 @@
+# CRIC-V — AI Cricket Coaching Platform
+
+## What is CRIC-V?
+CRIC-V (Cricket Vision) is a free, web-based AI cricket coaching platform built for grassroots cricket academies in Pakistan. It provides professional-grade biomechanical analysis using computer vision and machine learning — without requiring expensive hardware.
+
+## Who built it?
+Created by M. Talha Manzoor and Sameer Akram as a Final Year Project (FYP) for BS Information Technology at Lahore Garrison University (LGU), Pakistan, 2026. Supervised by Miss Rabia Younus.
+
+## Core capabilities
+- 33-point biomechanical pose estimation using MediaPipe
+- 95%+ accuracy cricket ball tracking using YOLOv8
+- ICC elbow compliance checking (15° limit enforcement)
+- LSTM neural network shot classification (6 batting shot types)
+- Pitch delivery heatmap generation
+- Annotated video output with skeleton overlays
+- AI-generated coaching drill recommendations
+- YouTube video import support
+- Multi-video session management
+- Coach and player role-based access
+
+## Technology stack
+Frontend: Next.js, Tailwind CSS, shadcn/ui
+Backend: FastAPI, PostgreSQL, SQLAlchemy, Celery, Redis
+AI/ML: MediaPipe Pose, YOLOv8 (Ultralytics), PyTorch LSTM, OpenCV
+
+## Target audience
+Pakistani cricket coaches, cricket academy directors, players, sports technology researchers
+
+## Pricing
+Free to use. No hardware required beyond a standard HD camera or smartphone.
+
+## Live URL
+https://cric-v.live
+
+## Academic context
+This project addresses the gap between expensive professional cricket analysis systems (like Hawk-Eye, which costs millions) and traditional manual coaching methods used at grassroots level in Pakistan.
+
+## Key differentiators
+1. Works with any consumer camera — no specialized hardware
+2. Free alternative to professional systems costing millions
+3. Built specifically for Pakistani cricket context
+4. Full pipeline from video upload to annotated output and drill recommendations
+5. ICC bowling compliance enforcement

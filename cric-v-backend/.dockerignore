@@ -1,0 +1,52 @@
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Byte-compiled / optimized
+__pycache__
+**/__pycache__
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Database
+cricv.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Data directories (mounted via volume)
+data/
+
+# Models (mounted via volume or downloaded)
+pose_landmarker.task
+models/
+yolov8n.pt
+
+# Binaries
+redis.zip
+redis_bin/
+
+# Testing & Cache
+.pytest_cache/
+tests/
+*.log
+
+# Misc
+README.md
+.vscode/
+.idea/

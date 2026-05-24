@@ -1,0 +1,419 @@
+from __future__ import annotations
+import enum
+import os
+from typing import Optional, Any, List, Dict, Union
+from sqlalchemy import (
+    Column, Integer, String, Float, DateTime, Boolean,
+    ForeignKey, JSON, Text
+)
+from sqlalchemy.orm import relationship
+from app.database import Base
+from sqlalchemy.sql import func
+from datetime import datetime
+
+class SessionStatus(enum.Enum):
+    UPLOADED = "uploaded"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String(20), default="player", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    refresh_token_hash = Column(String, nullable=True)
+    avatar_path = Column(String, nullable=True)
+    
+    # Auth redesign columns
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verification_token = Column(String, nullable=True)
+    verification_sent_at = Column(DateTime, nullable=True)
+    password_reset_token = Column(String, nullable=True)
+    password_reset_token_expires_at = Column(DateTime, nullable=True)
+    must_change_password = Column(Boolean, default=False, nullable=False)
+
+    # Relationships
+    player = relationship(
+        "Player",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+        foreign_keys="Player.user_id",
+    )
+
+    coached_sessions = relationship(
+        "Session",
+        back_populates="coach",
+        foreign_keys="Session.coach_id",
+    )
+
+    coached_players = relationship(
+        "Player",
+        back_populates="coach",
+        foreign_keys="Player.coach_id",
+    )
+
+    feedbacks = relationship(
+        "Feedback",
+        back_populates="coach",
+        foreign_keys="Feedback.coach_id",
+    )
+
+    def __repr__(self):
+        return f"<User id={self.id} username={self.username!r}>"
+
+    @property
+    def avatar_url(self) -> Optional[str]:
+        if self.avatar_path:
+            return f"/avatars/{os.path.basename(self.avatar_path)}"
+        return None
+
+    @property
+    def full_name(self) -> Optional[str]:
+        if self.player:
+            return self.player.full_name
+        return None
+
+
+class Player(Base):
+    __tablename__ = "players"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    coach_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    full_name = Column(String(255))
+    age = Column(Integer)
+    batting_hand = Column(String(20))
+    bowling_style = Column(String(50))
+    bio = Column(Text, nullable=True)
+    profile_picture = Column(String, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship(
+        "User",
+        back_populates="player",
+        foreign_keys=[user_id],
+    )
+
+    coach = relationship(
+        "User",
+        back_populates="coached_players",
+        foreign_keys=[coach_id],
+    )
+
+    sessions = relationship(
+        "Session",
+        back_populates="player",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self):
+        return f"<Player id={self.id} user_id={self.user_id} name={self.full_name!r}>"
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    player_id = Column(
+        Integer,
+        ForeignKey("players.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    coach_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    session_type = Column(String(50), nullable=False)  # bowling, batting
+    video_path = Column(String, nullable=True)
+    status = Column(String(30), nullable=False)  # uploaded, processing, completed, failed
+
+    title = Column(String(255), nullable=True)           # optional session title
+    thumbnail_path = Column(String, nullable=True)       # path to generated thumbnail
+    annotated_video_path = Column(String, nullable=True) # path to processed video with overlays
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    player = relationship("Player", back_populates="sessions")
+    coach = relationship(
+        "User",
+        back_populates="coached_sessions",
+        foreign_keys=[coach_id],
+    )
+
+    videos = relationship("Video", back_populates="session", cascade="all, delete-orphan")
+    
+    analysis = relationship(
+        "Analysis",
+        back_populates="session",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    feedbacks = relationship(
+        "Feedback",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+    deliveries = relationship(
+        "Delivery",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+    ball_tracking = relationship(
+        "BallTrackingAnalysis",
+        back_populates="session",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def player_user(self):
+        return self.player.user if self.player else None
+
+    def __repr__(self):
+        return f"<Session id={self.id} type={self.session_type!r} status={self.status!r}>"
+
+
+class Analysis(Base):
+    __tablename__ = "analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    session_id = Column(
+        Integer,
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    video_id = Column(
+        Integer,
+        ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    analysis_type = Column(String(50), nullable=False)
+
+    # Bowling metrics
+    elbow_extension = Column(Float)
+    arm_type = Column(String(50))
+    bowling_arm = Column(String(50))
+    bowling_style = Column(String(50))
+    release_point = Column(JSON)
+    release_height = Column(Float)
+    release_speed = Column(Float)
+    swing_type = Column(String(50))
+    accuracy_score = Column(Float)
+    front_foot_landing = Column(JSON)
+    icc_compliant = Column(Boolean)
+    violations = Column(JSON, default=list)
+
+    # Batting metrics
+    stance_type = Column(String(50))
+    weight_distribution = Column(JSON)
+    bat_angle = Column(Float)
+    head_stillness = Column(Float)
+    head_position = Column(JSON)
+    shot_selection = Column(String(100))
+    
+    recommendations = Column(JSON, default=list)
+    pose_data = Column(JSON)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    session = relationship("Session", back_populates="analysis")
+    video = relationship("Video", back_populates="analysis")
+
+    @property
+    def bowling_metrics(self):
+        if self.analysis_type != "bowling":
+            return None
+        return {
+            "elbow_extension": self.elbow_extension,
+            "arm_type": self.arm_type or self.bowling_arm,
+            "bowling_style": self.bowling_style,
+            "release_point": self.release_point,
+            "release_height": self.release_height,
+            "release_speed": self.release_speed,
+            "swing_type": self.swing_type,
+            "accuracy_score": self.accuracy_score,
+            "front_foot_landing": self.front_foot_landing,
+            "icc_compliant": self.icc_compliant,
+            "violations": self.violations or [],
+            "recommendations": self.recommendations or []
+        }
+
+    @property
+    def batting_metrics(self):
+        if self.analysis_type != "batting":
+            return None
+        return {
+            "stance_type": self.stance_type,
+            "weight_distribution": self.weight_distribution,
+            "bat_angle": self.bat_angle,
+            "head_stillness": self.head_stillness,
+            "head_position": self.head_position,
+            "shot_selection": self.shot_selection,
+            "recommendations": self.recommendations or []
+        }
+        
+
+
+    def __repr__(self):
+        return f"<Analysis id={self.id} session_id={self.session_id} type={self.analysis_type!r}>"
+
+class Video(Base):
+    __tablename__ = "videos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    file_path = Column(String, nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    file_size_mb = Column(Float, nullable=True)
+    status = Column(String(30), nullable=False, default="uploaded")  # uploaded, analyzing, done, failed
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    source_url = Column(String, nullable=True)      # Original URL if imported
+    source_type = Column(String, nullable=True)     # 'upload', 'youtube', 'direct_url'
+
+    # Relationships
+    session = relationship("Session", back_populates="videos")
+    analysis = relationship("Analysis", back_populates="video", uselist=False, cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Video id={self.id} session_id={self.session_id} filename={self.original_filename!r}>"
+
+class BallTrackingAnalysis(Base):
+    __tablename__ = "ball_tracking_analyses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    delivery_number = Column(Integer)
+    
+    # 3D Trajectory (if multiple cameras)
+    trajectory_3d = Column(JSON)  # list of points {x,y,z,frame}
+    release_point_3d = Column(JSON)
+    pitch_landing_3d = Column(JSON)
+    bat_contact_3d = Column(JSON)
+    final_position_3d = Column(JSON)
+    
+    # Ball physics
+    speed_kmh = Column(Float)
+    spin_rpm = Column(Float)
+    swing_angle = Column(Float)   # degrees of lateral movement
+    seam_angle = Column(Float)     # orientation at release
+    
+    # Performance metrics
+    accuracy_score = Column(Float)  # 0-100 (how close to target)
+    is_yorker = Column(Boolean)
+    is_bouncer = Column(Boolean)
+    is_full_toss = Column(Boolean)
+    
+    # Batting impact
+    shot_power = Column(Float)      # estimated power index
+    shot_timing = Column(Float)      # 0-100 (early/late)
+    runs_scored = Column(Integer)    # if boundary detected
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    session = relationship("Session", back_populates="ball_tracking")
+
+class Delivery(Base):
+    __tablename__ = "deliveries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    delivery_number = Column(Integer)  # within session
+    
+    # Ball tracking metrics
+    speed_kmh = Column(Float)
+    spin_rpm = Column(Float)
+    swing_angle = Column(Float)        # lateral movement in degrees/cm
+    pitch_landing_x = Column(Float)    # normalized 0-1 (left-right)
+    pitch_landing_y = Column(Float)    # normalized 0-1 (distance from bowler)
+    line = Column(String)               # "off", "middle", "leg"
+    length = Column(String)             # "yorker", "full", "good", "short", "bouncer"
+    is_boundary = Column(Boolean, default=False)
+    boundary_type = Column(String)      # "four", "six"
+    runs = Column(Integer, default=0)
+    
+    # Pose metrics at delivery
+    elbow_extension = Column(Float)
+    shoulder_angle = Column(Float)     # added
+    release_frame = Column(Integer)    # added
+    pitch_frame = Column(Integer)      # added
+    is_no_ball = Column(Boolean, default=False) # added
+    
+    release_point_x = Column(Float)
+    release_point_y = Column(Float)
+    release_point_z = Column(Float)
+    
+    # For batting
+    shot_type = Column(String)          # "drive", "cut", "pull", etc.
+    shot_power = Column(Float)           # 0-100
+    shot_timing = Column(Float)          # 0-100 (100 = perfect)
+    shot_direction = Column(String)      # "cover", "midwicket", "straight", etc.
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    session = relationship("Session", back_populates="deliveries")
+
+class Feedback(Base):
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(
+        Integer,
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    coach_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    comments = Column(Text, nullable=False)
+    drill_recommendations = Column(JSON, default=list)
+    rating = Column(Integer, default=5)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    session = relationship("Session", back_populates="feedbacks")
+    coach = relationship("User", back_populates="feedbacks")
+
+    def __repr__(self):
+        return f"<Feedback id={self.id} session_id={self.session_id} coach_id={self.coach_id}>"

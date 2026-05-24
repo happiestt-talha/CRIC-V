@@ -1,0 +1,35 @@
+# *
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /register
+Disallow: /dashboard
+Disallow: /sessions
+Disallow: /players
+Disallow: /analysis
+Disallow: /profile
+Disallow: /admin
+Disallow: /api/
+
+# GPTBot
+User-agent: GPTBot
+Allow: /
+
+# Claude-Web
+User-agent: Claude-Web
+Allow: /
+
+# PerplexityBot
+User-agent: PerplexityBot
+Allow: /
+
+# Googlebot
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 2
+
+# Host
+Host: https://cric-v.live
+
+# Sitemaps
+Sitemap: https://cric-v.live/sitemap.xml

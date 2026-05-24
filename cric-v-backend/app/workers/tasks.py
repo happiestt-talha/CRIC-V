@@ -1,0 +1,286 @@
+"""
+Celery tasks for background processing
+"""
+#app/workers/tasks.py
+from celery import Celery
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Initialize Celery
+celery_app = Celery(
+    'cricv_worker',
+    broker=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    backend=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    include=['app.workers.tasks']
+)
+
+# Celery configuration
+celery_app.conf.update(
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='UTC',
+    enable_utc=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 minutes
+    task_soft_time_limit=25 * 60,  # 25 minutes
+    worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=10,
+)
+
+@celery_app.task(bind=True, name='process_video_task')
+def process_video_task(self, session_id: int, *args, **kwargs):
+    """
+    Celery task to process video asynchronously
+    """
+    from app.services.integration_service import integration_service
+    from app.database import SessionLocal
+    from app.core.models import Session
+    
+    db = SessionLocal()
+    
+    try:
+        # Log task start
+        self.update_state(state='PROCESSING', meta={'session_id': session_id})
+        
+        # Process the session
+        result = integration_service.process_session(session_id)
+        
+        if result.get("success"):
+            return {
+                "status": "SUCCESS",
+                "session_id": session_id,
+                "analysis_id": result.get("analysis_id"),
+                "summary": result.get("summary")
+            }
+        else:
+            return {
+                "status": "FAILED",
+                "session_id": session_id,
+                "error": result.get("error")
+            }
+            
+    except Exception as e:
+        # Update session status to failed
+        session = db.query(Session).filter(Session.id == session_id).first()
+        if session:
+            session.status = "failed"
+            db.commit()
+        
+        return {
+            "status": "FAILED",
+            "session_id": session_id,
+            "error": str(e)
+        }
+        
+    finally:
+        db.close()
+
+@celery_app.task(bind=True, name='analyze_video_task')
+def analyze_video_task(self, video_id: int, *args, **kwargs):
+    """
+    Celery task to process a single video
+    """
+    from app.services.integration_service import integration_service
+    
+    task_id = self.request.id
+    result = integration_service.process_video(video_id, task_id)
+    
+    if result.get("success"):
+        from app.database import SessionLocal
+        from app.core.models import Video
+        db = SessionLocal()
+        try:
+            video = db.query(Video).filter(Video.id == video_id).first()
+            if video and video.session:
+                video.session.status = "completed"
+                db.commit()
+        finally:
+            db.close()
+            
+    return result
+
+@celery_app.task(bind=True, name='analyze_session_all_task')
+def analyze_session_all_task(self, session_id: int, *args, **kwargs):
+    """
+    Celery task to process all videos in a session sequentially
+    """
+    from app.database import SessionLocal
+    from app.core.models import Session as DBSession, Video
+    from app.services.integration_service import integration_service
+    
+    db = SessionLocal()
+    task_id = self.request.id
+    
+    try:
+        session = db.query(DBSession).filter(DBSession.id == session_id).first()
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+            
+        videos = db.query(Video).filter(Video.session_id == session_id).all()
+        video_count = len(videos)
+        
+        results = []
+        for i, video in enumerate(videos):
+            # Update overall progress for the whole task
+            # We can use a special format or just update the redis key
+            # Actually, the user wants sequential processing.
+            # We'll update the same task_id key but maybe with video info
+            integration_service.update_progress(
+                task_id, 
+                int((i / video_count) * 100), 
+                f"Processing video {i+1} of {video_count}", 
+                video.id
+            )
+            
+            res = integration_service.process_video(video.id, task_id)
+            results.append(res)
+            
+        # Update session status to completed
+        session.status = "completed"
+        db.commit()
+        
+        integration_service.update_progress(task_id, 100, "All videos processed", None, status="complete")
+        
+        return {
+            "status": "SUCCESS",
+            "session_id": session_id,
+            "video_count": video_count,
+            "results": results
+        }
+        
+    except Exception as e:
+        integration_service.update_progress(task_id, 0, f"Error: {str(e)}", None, status="failed")
+        return {"status": "FAILED", "error": str(e)}
+    finally:
+        db.close()
+
+@celery_app.task(name='batch_process_sessions')
+def batch_process_sessions(session_ids: list):
+    """
+    Process multiple sessions in batch
+    """
+    results = []
+    for session_id in session_ids:
+        result = process_video_task.delay(session_id)
+        results.append(result.id)
+    
+    return {
+        "status": "BATCH_STARTED",
+        "task_ids": results,
+        "total_sessions": len(session_ids)
+    }
+
+@celery_app.task(name='cleanup_old_sessions')
+def cleanup_old_sessions(days_old: int = 30):
+    """
+    Clean up old session data
+    """
+    from app.database import SessionLocal
+    from app.core.models import Session
+    from datetime import datetime, timedelta
+    import os
+    
+    db = SessionLocal()
+    cutoff_date = datetime.utcnow() - timedelta(days=days_old)
+    
+    try:
+        # Find old sessions
+        old_sessions = db.query(Session).filter(
+            Session.created_at < cutoff_date,
+            Session.status == "completed"
+        ).all()
+        
+        deleted_count = 0
+        for session in old_sessions:
+            # Delete video file
+            if session.video_path and os.path.exists(session.video_path):
+                os.remove(session.video_path)
+            
+            # Delete from database
+            db.delete(session)
+            deleted_count += 1
+        
+        db.commit()
+        
+        return {
+            "status": "CLEANUP_COMPLETED",
+            "deleted_sessions": deleted_count,
+            "cutoff_date": cutoff_date.isoformat()
+        }
+        
+    finally:
+        db.close()
+
+@celery_app.task(bind=True, name='download_and_import_video_task')
+def download_and_import_video_task(self, session_id: int, url: str):
+    """
+    Celery task: download video from URL and add to session.
+    Tracks progress in Redis for SSE streaming.
+    """
+    from app.services.url_video_service import download_video
+    from app.database import SessionLocal
+    from app.core.models import Session as DBSession, Video
+    from app.services.integration_service import integration_service
+    import os
+
+    task_id = self.request.id
+    db = SessionLocal()
+
+    def update_progress(percent, stage, **kwargs):
+        integration_service.update_progress(task_id, percent, stage, None, **kwargs)
+
+    try:
+        session = db.query(DBSession).filter(DBSession.id == session_id).first()
+        if not session:
+            integration_service.update_progress(task_id, 0, "Session not found", None, status="failed")
+            return {"success": False, "error": "Session not found"}
+
+        # Step 1: Download
+        update_progress(5, "Starting download...")
+        output_dir = os.path.join("data", "raw_videos", f"session_{session_id}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        result = download_video(
+            url=url,
+            output_dir=output_dir,
+            filename_prefix=f"session_{session_id}",
+            progress_callback=update_progress
+        )
+
+        if not result["success"]:
+            integration_service.update_progress(task_id, 0, result["error"], None, status="failed")
+            return {"success": False, "error": result["error"]}
+
+        # Step 2: Create Video record in DB
+        update_progress(95, "Saving to database...")
+        video = Video(
+            session_id=session_id,
+            file_path=result["file_path"],
+            original_filename=result["filename"],
+            file_size_mb=result["file_size_mb"],
+            status="uploaded",
+            source_url=url,  # Store the original URL
+            source_type="youtube" if "youtube" in url or "youtu.be" in url else "direct_url"
+        )
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+
+        update_progress(100, "Import complete — video ready for analysis", status="complete")
+
+        return {
+            "success": True,
+            "video_id": video.id,
+            "session_id": session_id,
+            "filename": result["filename"],
+            "file_size_mb": result["file_size_mb"]
+        }
+
+    except Exception as e:
+        integration_service.update_progress(task_id, 0, f"Import failed: {str(e)}", None, status="failed")
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()

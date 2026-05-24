@@ -1,0 +1,45 @@
+# Environments
+.env
+.env.*
+.venv
+env/
+venv/
+ENV/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Database
+cricv.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Data & Test Videos
+data/
+.data/
+test_videos/
+
+# Models and Binary downloads
+pose_landmarker.task
+yolov8n.pt
+redis.zip
+redis_bin/
+
+# Cache & Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Misc
+*.log
+.DS_Store
+.vscode/
+.idea/
+mig.py
+Struc-after-model.md

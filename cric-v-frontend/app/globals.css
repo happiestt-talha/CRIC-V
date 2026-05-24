@@ -1,0 +1,384 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=Syne:wght@700;800&display=swap');
+
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 142.1 76.2% 36.3%;
+    --primary-foreground: 355.7 100% 97.3%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 142.1 76.2% 36.3%;
+    --radius: 0.5rem;
+
+    /* ── App shell tokens (used by dashboard, sidebar, etc.) ── */
+    --bg-primary: #f1f5f9;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f8fafc;
+    --border-color: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-muted: #64748b;
+    --accent-green: #16a34a;
+    --sidebar-bg: #ffffff;
+    --navbar-bg: rgba(255, 255, 255, 0.9);
+    --input-bg: #ffffff;
+
+    /* ── Landing page design tokens ── */
+    --lp-cream: #f5f0e8;
+    --lp-ink: #0a0a08;
+    --lp-pitch: #1a4a2e;
+    --lp-lime: #a8e063;
+    --lp-gold: #c9a84c;
+    --lp-ember: #d64f2a;
+    --lp-steel: #8a9ba8;
+    --lp-deep: #060c10;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 142.1 70.6% 45.3%;
+    --primary-foreground: 144.9 80.4% 10%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 142.4 71.8% 29.2%;
+
+    --bg-primary: #0f172a;
+    --bg-card: #1e293b;
+    --bg-card-hover: #273549;
+    --border-color: #334155;
+    --text-primary: #f1f5f9;
+    --text-muted: #64748b;
+    --accent-green: #22c55e;
+    --sidebar-bg: #0f172a;
+    --navbar-bg: rgba(15, 23, 42, 0.9);
+    --input-bg: #1e293b;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   App shell styles (dashboard, sidebar, cards, inputs, dialogs)
+   These are scoped to NOT interfere with the landing page.
+───────────────────────────────────────────────────────────────── */
+
+[data-slot="select-trigger"] [data-placeholder] {
+  color: rgb(148 163 184) !important;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border-color: var(--border-color);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+input,
+textarea,
+select {
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+[role="dialog"] {
+  background-color: var(--bg-card);
+  border-color: var(--border-color);
+}
+
+[data-radix-popper-content-wrapper] {
+  --tw-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+
+/* View Transitions API for Theme Toggling */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+  animation: fade-out 0.4s ease-in-out forwards;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
+  animation: fade-in 0.4s ease-in-out forwards;
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.theme-transitioning * {
+  transition: none !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Landing page styles
+   All scoped under .cricv-root so they NEVER leak into the
+   dashboard or any other page in your app.
+───────────────────────────────────────────────────────────────── */
+
+.cricv-root {
+  position: relative;
+  background: var(--lp-deep);
+  color: var(--lp-cream);
+  overflow-x: hidden;
+}
+
+/* Override body defaults only inside the landing root */
+.cricv-root *,
+.cricv-root *::before,
+.cricv-root *::after {
+  box-sizing: border-box;
+}
+
+/* Cursor — shown globally so the ring follows the pointer everywhere */
+.cursor-dot {
+  position: fixed;
+  width: 8px;
+  height: 8px;
+  background: var(--lp-lime);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 9999;
+  transform: translate(-50%, -50%);
+  transition: width 0.2s, height 0.2s, background 0.2s;
+  mix-blend-mode: difference;
+}
+
+.cursor-ring {
+  position: fixed;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(168, 224, 99, 0.5);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 9998;
+  transform: translate(-50%, -50%);
+  transition: width 0.3s, height 0.3s;
+}
+
+@media (max-width: 768px) {
+
+  .cursor-dot,
+  .cursor-ring {
+    display: none;
+  }
+}
+
+/* ── Landing typography ── */
+.cricv-root .display-xl {
+  font-family: 'Playfair Display', serif;
+  font-weight: 900;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+}
+
+.cricv-root .display-lg {
+  font-family: 'Playfair Display', serif;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.cricv-root .eyebrow {
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--lp-lime);
+}
+
+.cricv-root .body-text {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 300;
+  line-height: 1.7;
+  color: var(--lp-steel);
+}
+
+/* ── Utility: accent rule ── */
+.cricv-root .hr-accent {
+  width: 48px;
+  height: 1px;
+  background: var(--lp-lime);
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ── Noise overlay (applied to elements that add .noise class) ── */
+.cricv-root .noise {
+  position: relative;
+}
+
+.cricv-root .noise::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  opacity: 0.35;
+  z-index: 1;
+}
+
+/* ── Scroll reveal animations ── */
+.cricv-root .fade-up {
+  opacity: 0;
+  transform: translateY(40px);
+  transition:
+    opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cricv-root .fade-up.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger children — set --i on each child inline */
+.cricv-root .stagger>* {
+  transition-delay: calc(var(--i, 0) * 0.08s);
+}
+
+/* ── Keyframes used across landing sections ── */
+@keyframes cricv-blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes cricv-scroll-pulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scaleY(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleY(1.1);
+  }
+}
+
+@keyframes cricv-scan {
+  0% {
+    top: 0%;
+    opacity: 1;
+  }
+
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes cricv-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cricv-marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
