@@ -1,0 +1,154 @@
+# Development Docker Compose
+# Run with: docker-compose up --build
+# Stop with: docker-compose down
+# Stop and delete data: docker-compose down -v
+
+services:
+
+  # PostgreSQL database
+  db:
+    image: postgres:15-alpine
+    container_name: cricv_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # Named volume — data persists between restarts
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Expose to host so you can connect with a DB client like DBeaver
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis — message broker for Celery
+  redis:
+    image: redis:7-alpine
+    container_name: cricv_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI backend
+  backend:
+    build:
+      context: ./cric-v-backend
+      dockerfile: Dockerfile
+      network: host
+    container_name: cricv_backend
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # Hot reload — mount source code
+      - ./cric-v-backend:/app
+      # Persist data files outside container
+      - cricv_data:/app/data
+      # Mount models (large files — don't bake into image)
+      - ./cric-v-backend/models:/app/models
+      - ./cric-v-backend/pose_landmarker.task:/app/pose_landmarker.task
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Running database migrations...' &&
+        alembic upgrade head &&
+        echo 'Starting FastAPI...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # Celery worker — runs background tasks
+  worker:
+    build:
+      context: ./cric-v-backend
+      dockerfile: Dockerfile
+    container_name: cricv_worker
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./cric-v-backend:/app
+      - cricv_data:/app/data
+      - ./cric-v-backend/models:/app/models
+      - ./cric-v-backend/pose_landmarker.task:/app/pose_landmarker.task
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Solo pool — required for Windows compatibility
+    command: celery -A app.workers.tasks worker --loglevel=info --pool=solo
+
+  # Next.js frontend
+  frontend:
+    build:
+      context: ./cric-v-frontend
+      dockerfile: Dockerfile
+      network: host
+    container_name: cricv_frontend
+    restart: unless-stopped
+    env_file:
+      - ./cric-v-frontend/.env.local
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost/api
+    volumes:
+      # Hot reload — mount source code
+      - ./cric-v-frontend:/app
+      # Don't mount node_modules — use container's version
+      - /app/node_modules
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: cricv_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+# Named volumes — data persists between docker-compose down/up
+volumes:
+  postgres_data:
+    name: cricv_postgres_data
+  cricv_data:
+    name: cricv_app_data
