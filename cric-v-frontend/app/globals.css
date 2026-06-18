@@ -382,3 +382,26 @@ select {
     transform: translateX(-50%);
   }
 }
+
+/* ── Video Player utilities ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Range input accent for volume/seek */
+input[type="range"].accent-green-500 {
+  accent-color: #22c55e;
+}
+
+input[type="range"].accent-green-500::-webkit-slider-thumb {
+  background: #22c55e;
+}
+
+input[type="range"].accent-green-500::-moz-range-thumb {
+  background: #22c55e;
+}

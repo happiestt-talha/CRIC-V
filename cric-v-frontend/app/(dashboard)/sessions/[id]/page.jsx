@@ -157,8 +157,7 @@ export default function SessionDetailPage({ params }) {
 
     const handleDeliveryView = (delivery) => {
         setSelectedDeliveryId(delivery.id)
-        setActiveVideoTab('annotated')
-        setTimeout(() => setSeekToSeconds(delivery.release_timestamp_seconds), 100)
+        setSeekToSeconds(delivery.release_timestamp_seconds)
     }
 
     if (sessionLoading || (loading && !session)) {
@@ -264,65 +263,48 @@ export default function SessionDetailPage({ params }) {
 
                         {/* Video Player Card */}
                         <Card className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-                            <CardHeader className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-row items-center justify-between">
-                                <CardTitle className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                                    <Video className="w-3.5 h-3.5 text-green-500" />
-                                    Video Feed
-                                </CardTitle>
-                                <div className="flex items-center gap-1.5">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Live</span>
-                                </div>
-                            </CardHeader>
-                            <CardContent className="p-3 space-y-3">
-                                <Tabs value={activeVideoTab} onValueChange={setActiveVideoTab} className="w-full">
-                                    <TabsList className="w-full bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 p-0.5 h-8">
-                                        <TabsTrigger
-                                            value="original"
-                                            className="flex-1 text-[10px] font-black uppercase tracking-wider h-full data-[state=active]:bg-white dark:data-[state=active]:bg-slate-700 data-[state=active]:shadow-sm rounded"
-                                        >
-                                            Original
-                                        </TabsTrigger>
-                                        <TabsTrigger
-                                            value="annotated"
-                                            className="flex-1 text-[10px] font-black uppercase tracking-wider h-full data-[state=active]:bg-green-600 data-[state=active]:text-white rounded"
-                                        >
-                                            Annotated
-                                        </TabsTrigger>
-                                    </TabsList>
-                                </Tabs>
-
-                                {/* Video content */}
-                                {activeVideoTab === 'original' && (
-                                    <VideoPlayer src={originalUrl} label="Original Recording" />
-                                )}
-
-                                {activeVideoTab === 'annotated' && (
-                                    session.annotated_video_path || analysis ? (
-                                        <VideoPlayer
-                                            src={annotatedUrl}
-                                            seekToSeconds={seekToSeconds}
-                                            label="AI Annotated Result"
-                                        />
-                                    ) : (
-                                        <div className="aspect-video bg-slate-50 dark:bg-slate-950/50 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-lg flex flex-col items-center justify-center gap-3 p-6 text-center">
-                                            <div className="w-12 h-12 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
-                                                <Video className="w-5 h-5 text-slate-400" />
-                                            </div>
-                                            <div>
-                                                <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Not Ready</p>
-                                                <p className="text-[10px] text-slate-400 mt-0.5">Run analysis to generate AI overlays</p>
-                                            </div>
-                                            <Button
-                                                size="sm"
-                                                className="bg-green-600 hover:bg-green-700 text-white font-bold text-xs mt-1"
-                                                onClick={handleReanalyze}
-                                                disabled={reanalyzing}
-                                            >
-                                                {reanalyzing ? 'Processing…' : 'Analyze Now'}
-                                            </Button>
+                            <CardContent className="p-3">
+                                {originalUrl ? (
+                                    <div className="space-y-3 flex flex-col h-[600px]">
+                                        {(session.annotated_video_path || analysis) && (
+                                            <Tabs value={activeVideoTab} onValueChange={setActiveVideoTab} className="w-full shrink-0">
+                                                <TabsList className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-1 flex gap-0.5 w-full shadow-sm">
+                                                    <TabsTrigger 
+                                                        value="original" 
+                                                        className="flex-1 text-[10px] font-black uppercase tracking-wider h-7 data-[state=active]:bg-slate-800 dark:data-[state=active]:bg-slate-200 data-[state=active]:text-white dark:data-[state=active]:text-slate-900 rounded transition-all"
+                                                    >
+                                                        Original Video
+                                                    </TabsTrigger>
+                                                    <TabsTrigger 
+                                                        value="annotated" 
+                                                        className="flex-1 text-[10px] font-black uppercase tracking-wider h-7 data-[state=active]:bg-green-600 data-[state=active]:text-white rounded transition-all"
+                                                    >
+                                                        Annotated Video
+                                                    </TabsTrigger>
+                                                </TabsList>
+                                            </Tabs>
+                                        )}
+                                        <div className="relative flex-1 min-h-0 bg-black rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
+                                            <VideoPlayer
+                                                src={activeVideoTab === 'annotated' ? annotatedUrl : originalUrl}
+                                                deliveries={deliveries}
+                                                sessionId={session.id}
+                                                fps={30}
+                                                seekToSeconds={seekToSeconds}
+                                                className="w-full h-full"
+                                            />
                                         </div>
-                                    )
+                                    </div>
+                                ) : (
+                                    <div className="aspect-video bg-slate-50 dark:bg-slate-950/50 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-lg flex flex-col items-center justify-center gap-3 p-6 text-center">
+                                        <div className="w-12 h-12 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+                                            <Video className="w-5 h-5 text-slate-400" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-black text-slate-500 uppercase tracking-widest">No Video</p>
+                                            <p className="text-[10px] text-slate-400 mt-0.5">Upload a video to begin analysis</p>
+                                        </div>
+                                    </div>
                                 )}
                             </CardContent>
                         </Card>

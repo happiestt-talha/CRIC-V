@@ -11,6 +11,34 @@ import cv2
 import numpy as np
 from typing import Dict, Any    
 
+import shutil
+
+def get_ffmpeg_path() -> str:
+    """
+    Get the path to the ffmpeg executable, checking PATH and common WinGet directories.
+    """
+    # 1. Check system PATH
+    in_path = shutil.which('ffmpeg')
+    if in_path:
+        return in_path
+    
+    # 2. Check WinGet installation paths
+    try:
+        user_profile = os.environ.get("USERPROFILE")
+        if user_profile:
+            winget_base = os.path.join(user_profile, "AppData", "Local", "Microsoft", "WinGet", "Packages")
+            if os.path.exists(winget_base):
+                for dir_name in os.listdir(winget_base):
+                    if dir_name.startswith("Gyan.FFmpeg"):
+                        pkg_dir = os.path.join(winget_base, dir_name)
+                        for root, _, files in os.walk(pkg_dir):
+                            if "ffmpeg.exe" in files:
+                                return os.path.join(root, "ffmpeg.exe")
+    except Exception:
+        pass
+        
+    return 'ffmpeg'
+
 def extract_video_metadata(video_path: str) -> Dict[str, Any]:
     """
     Extract metadata from video file
@@ -324,7 +352,7 @@ def generate_annotated_video(
     try:
         import subprocess
         subprocess.run([
-            'ffmpeg', '-y', '-i', temp_output, 
+            get_ffmpeg_path(), '-y', '-i', temp_output, 
             '-vcodec', 'libx264', '-crf', '23', 
             '-pix_fmt', 'yuv420p', 
             output_video_path

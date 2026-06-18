@@ -7,7 +7,7 @@ from typing import List
 from app.core import models, schemas, security
 from app.database import get_db
 from app.core.models import User, Session as DBSession, Analysis, Player
-from app.services.video_processor import process_video_background
+from app.services.video_processor import process_video_background, get_ffmpeg_path
 from app.workers.tasks import analyze_video_task, analyze_session_all_task
 from app.analytics.bowling_insights import BowlingInsights
 import redis
@@ -457,7 +457,7 @@ async def get_delivery_clip(
     
     try:
         cmd = [
-            'ffmpeg', '-y',
+            get_ffmpeg_path(), '-y',
             '-ss', str(start_time),
             '-i', session.video_path,
             '-t', str(duration),
