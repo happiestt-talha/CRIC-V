@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Frontend: NextJS",
+      "type": "shell",
+      "command": "npm run dev",
+      "icon": { "id": "browser", "color": "terminal.ansiCyan" },
+      "options": {
+        "cwd": "${workspaceFolder}/cric-v-frontend"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Backend: Uvicorn",
+      "type": "shell",
+      "command": ".\\venv\\Scripts\\Activate.ps1; uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
+      "icon": { "id": "server-environment", "color": "terminal.ansiGreen" },
+      "options": {
+        "cwd": "${workspaceFolder}/cric-v-backend"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Backend: Celery Worker",
+      "type": "shell",
+      "command": ".\\venv\\Scripts\\Activate.ps1; celery -A app.workers.tasks:celery_app worker --loglevel=info --pool=solo",
+      "icon": { "id": "gear", "color": "terminal.ansiYellow" },
+      "options": {
+        "cwd": "${workspaceFolder}/cric-v-backend"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Start Fullstack (All)",
+      "dependsOn": ["Frontend: NextJS", "Backend: Uvicorn", "Backend: Celery Worker"],
+      "icon": { "id": "rocket", "color": "terminal.ansiMagenta" },
+      "dependsOrder": "parallel",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
